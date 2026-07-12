@@ -1,0 +1,321 @@
+@import "tailwindcss";
+
+:root {
+  /*
+    InterviewX Design Language (Dark theme first)
+    - Tokens: colors, typography, spacing, radius, shadows, motion
+    - Semantic tokens: success/warning/error
+
+    Notes:
+    - We keep a few legacy variables (e.g. --accent, --bg) for the current UI.
+    - New code should use the --color-* / --space-* / --radius-* token families.
+  */
+
+  /* ========== Color (Light defaults, overridden in dark) ========== */
+  --color-bg: #ffffff;
+  --color-surface: rgba(255, 255, 255, 0.72);
+  --color-surface-1: #ffffff;
+  --color-surface-2: #f7f7fb;
+  --color-surface-3: #f1f1f7;
+
+  --color-text: #2a2430;
+  --color-text-muted: rgba(42, 36, 48, 0.72);
+  --color-text-invert: #0a0a0f;
+
+  --color-border: rgba(31, 24, 40, 0.12);
+  --color-border-strong: rgba(31, 24, 40, 0.18);
+
+  /* Primary / Accent */
+  --color-primary: #6d28d9;
+  --color-primary-600: #7c3aed;
+  --color-accent: #7c3aed;
+  --color-accent-bg: rgba(124, 58, 237, 0.12);
+  --color-accent-border: rgba(124, 58, 237, 0.34);
+
+  /* Status */
+  --color-success: #16a34a;
+  --color-success-bg: rgba(22, 163, 74, 0.14);
+  --color-success-border: rgba(22, 163, 74, 0.34);
+
+  --color-warning: #f59e0b;
+  --color-warning-bg: rgba(245, 158, 11, 0.14);
+  --color-warning-border: rgba(245, 158, 11, 0.34);
+
+  --color-error: #ef4444;
+  --color-error-bg: rgba(239, 68, 68, 0.14);
+  --color-error-border: rgba(239, 68, 68, 0.34);
+
+  /* Focus & overlays */
+  --color-focus: rgba(124, 58, 237, 0.45);
+  --color-overlay: rgba(10, 10, 15, 0.46);
+
+  /* Legacy vars (used by existing CSS) */
+  --text: var(--color-text);
+  --text-h: var(--color-text-invert);
+  --bg: var(--color-bg);
+  --border: var(--color-border);
+  --code-bg: #f5f3ff;
+  --accent: var(--color-accent);
+  --accent-bg: var(--color-accent-bg);
+  --accent-border: var(--color-accent-border);
+  --social-bg: rgba(124, 58, 237, 0.08);
+
+  /* ========== Typography ========== */
+  --font-sans: system-ui, -apple-system, 'Segoe UI', Roboto, Helvetica, Arial,
+    sans-serif;
+  --font-heading: var(--font-sans);
+  --font-mono: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas,
+    'Liberation Mono', 'Courier New', monospace;
+
+  /* Keep existing variables for compatibility */
+  --sans: var(--font-sans);
+  --heading: var(--font-heading);
+  --mono: var(--font-mono);
+
+  /* Text sizes (rem-based) */
+  --text-hero: 4rem; /* 64px */
+  --text-h1: 2rem; /* 32px */
+  --text-h2: 1.5rem; /* 24px */
+  --text-h3: 1.125rem; /* 18px */
+  --text-body: 1rem; /* 16px */
+  --text-caption: 0.875rem; /* 14px */
+
+  --leading-hero: 1.05;
+  --leading-h1: 1.2;
+  --leading-h2: 1.25;
+  --leading-h3: 1.35;
+  --leading-body: 1.55;
+  --leading-caption: 1.4;
+
+  --tracking-tight: -0.02em;
+  --tracking-normal: 0em;
+
+  /* We keep the page defaults aligned with the design system */
+  font: 18px/145% var(--font-sans);
+  letter-spacing: 0.01em;
+  color-scheme: light;
+  color: var(--color-text);
+  background: var(--color-bg);
+  font-synthesis: none;
+  text-rendering: optimizeLegibility;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+
+  @media (max-width: 1024px) {
+    font-size: 16px;
+  }
+
+  /* ========== Spacing (4/8 scale) ========== */
+  --space-0: 0px;
+  --space-1: 4px;
+  --space-2: 8px;
+  --space-3: 12px;
+  --space-4: 16px;
+  --space-5: 20px;
+  --space-6: 24px;
+  --space-7: 28px;
+  --space-8: 32px;
+  --space-9: 40px;
+  --space-10: 48px;
+  --space-11: 56px;
+  --space-12: 64px;
+  --space-14: 80px;
+
+  /* ========== Radius ========== */
+  --radius-1: 6px;
+  --radius-2: 10px;
+  --radius-3: 14px;
+  --radius-4: 18px;
+  --radius-full: 999px;
+
+  /* ========== Shadows (subtle SaaS) ========== */
+  --shadow-none: 0 0 #0000;
+  --shadow-sm: 0 1px 2px rgba(12, 12, 24, 0.12);
+  --shadow-md: 0 10px 22px rgba(12, 12, 24, 0.18);
+  --shadow-lg: 0 24px 60px rgba(12, 12, 24, 0.22);
+
+  /* Legacy shadow var */
+  --shadow: var(--shadow-sm);
+
+  /* ========== Motion ========== */
+  --motion-fast: 140ms;
+  --motion-normal: 220ms;
+  --motion-slow: 360ms;
+
+  --ease-out: cubic-bezier(0.16, 1, 0.3, 1);
+  --ease-in: cubic-bezier(0.7, 0, 0.84, 0);
+  --ease-smooth: cubic-bezier(0.2, 0.8, 0.2, 1);
+
+  --ring: 0 0 0 4px var(--color-focus);
+}
+
+html,
+body {
+  margin: 0;
+  padding: 0;
+  width: 100%;
+  min-height: 100%;
+  background: var(--color-bg);
+  color: var(--color-text);
+  overflow-x: hidden;
+}
+
+#root {
+  width: 100%;
+  min-height: 100svh;
+  display: flex;
+  flex-direction: column;
+}
+
+/* Keep semantic heading defaults for now (components will own styles later). */
+h1,
+h2 {
+  font-family: var(--font-heading);
+  font-weight: 560;
+  color: var(--color-text-invert);
+}
+
+h1 {
+  font-size: var(--text-hero);
+  line-height: var(--leading-hero);
+  letter-spacing: var(--tracking-tight);
+  margin: var(--space-8) 0;
+
+  @media (max-width: 1024px) {
+    font-size: 2.25rem;
+    margin: var(--space-6) 0;
+  }
+}
+
+h2 {
+  font-size: var(--text-h2);
+  line-height: var(--leading-h2);
+  letter-spacing: var(--tracking-tight);
+  margin: 0 0 var(--space-2);
+
+  @media (max-width: 1024px) {
+    font-size: 1.25rem;
+  }
+}
+
+p {
+  margin: 0;
+}
+
+code,
+.counter {
+  font-family: var(--font-mono);
+  display: inline-flex;
+  border-radius: 6px;
+  color: var(--color-text-invert);
+}
+
+code {
+  font-size: 0.9375rem;
+  line-height: 135%;
+  padding: 4px 8px;
+  background: var(--code-bg);
+}
+
+/* ========== Pulse ring (Start Interview / Submit CTAs) ========== */
+.pulse-ring {
+  opacity: 0;
+}
+
+button:hover .pulse-ring,
+button:focus-visible .pulse-ring {
+  animation: pulse-ring-grow 0.9s ease-out;
+}
+
+@keyframes pulse-ring-grow {
+  0% {
+    opacity: 0.55;
+    transform: scale(1);
+  }
+  100% {
+    opacity: 0;
+    transform: scale(1.18);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .pulse-ring {
+    animation: none !important;
+  }
+}
+
+/* ========== Print / Export PDF styles ========== */
+@media print {
+  /* Force light background and dark text regardless of theme */
+  :root {
+    --color-bg: #ffffff !important;
+    --color-surface-1: #ffffff !important;
+    --color-surface-2: #f7f7fb !important;
+    --color-surface-3: #f1f1f7 !important;
+    --color-text: #2a2430 !important;
+    --color-text-invert: #0a0a0f !important;
+    --color-text-muted: #6b7280 !important;
+    --color-border: #e5e7eb !important;
+    --color-border-strong: #d1d5db !important;
+  }
+
+  /* Hide everything except the report content */
+  body > * { display: none !important; }
+  #root { display: block !important; }
+
+  /* Hide nav, buttons, and non-report UI */
+  nav,
+  header,
+  .no-print,
+  button:not(.print-keep) {
+    display: none !important;
+  }
+
+  /* Remove shadows and animations */
+  * {
+    box-shadow: none !important;
+    animation: none !important;
+    transition: none !important;
+  }
+
+  /* Page setup */
+  @page {
+    margin: 1.5cm 2cm;
+    size: A4;
+  }
+
+  html, body {
+    width: 100%;
+    font-size: 12pt;
+  }
+
+  /* Prevent content breaking across pages mid-element */
+  .rounded-2xl,
+  .rounded-xl {
+    page-break-inside: avoid;
+    break-inside: avoid;
+  }
+
+  /* Ensure score bars render filled (browsers often skip background-color in print) */
+  .print-bar {
+    -webkit-print-color-adjust: exact !important;
+    print-color-adjust: exact !important;
+  }
+
+  /* Max width for print layout */
+  .mx-auto {
+    max-width: 100% !important;
+  }
+
+  /* Add a footer with the app name */
+  body::after {
+    content: "InterviewX — AI-Powered Interview Intelligence";
+    display: block;
+    text-align: center;
+    font-size: 9pt;
+    color: #9ca3af;
+    margin-top: 2rem;
+    border-top: 1px solid #e5e7eb;
+    padding-top: 0.75rem;
+  }
+}
