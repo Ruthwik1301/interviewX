@@ -1,5 +1,5 @@
 import { useState } from "react";
-import { NavLink, useNavigate } from "react-router-dom";
+import { NavLink, useLocation, useNavigate } from "react-router-dom";
 import { motion } from "framer-motion";
 import { Eye, EyeOff, ArrowRight, Sparkles, Check } from "lucide-react";
 import { RoutePaths } from "@/app/routes/paths";
@@ -13,11 +13,17 @@ const PERKS = [
 
 export default function RegisterPage() {
   const navigate = useNavigate();
+  const location = useLocation();
   const { register, loginWithGoogle } = useAuth();
   const [form, setForm] = useState({ name: "", email: "", password: "" });
   const [showPassword, setShowPassword] = useState(false);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
+
+  const query = new URLSearchParams(location.search);
+  const hasTeamInvite = Boolean(query.get("teamInviteToken"));
+  const inviteAwarePath = (path) =>
+    hasTeamInvite ? `${path}${location.search}` : path;
 
   function update(field) {
     return (e) => setForm((prev) => ({ ...prev, [field]: e.target.value }));
@@ -124,6 +130,29 @@ export default function RegisterPage() {
               </span>
             ))}
           </div>
+
+          {/* Team invite context */}
+          {hasTeamInvite && (
+            <motion.div
+              initial={{ opacity: 0, y: -8 }}
+              animate={{ opacity: 1, y: 0 }}
+              className="mb-5 rounded-xl border px-4 py-3 text-sm"
+              style={{
+                background: "var(--color-accent-bg)",
+                borderColor: "var(--color-accent-border)",
+                color: "var(--color-text)",
+              }}
+            >
+              <p className="font-semibold" style={{ color: "var(--color-accent)" }}>
+                Team invite detected
+              </p>
+              <p className="mt-1 leading-relaxed">
+                Create your account with the invited email address. After you sign
+                in, you'll be taken to the Profile page to accept the team
+                invite.
+              </p>
+            </motion.div>
+          )}
 
           {/* Error */}
           {error && (
@@ -358,7 +387,7 @@ export default function RegisterPage() {
           >
             Already have an account?{" "}
             <NavLink
-              to={RoutePaths.login}
+              to={inviteAwarePath(RoutePaths.login)}
               className="font-semibold transition-colors hover:text-[color:var(--color-text-invert)]"
               style={{ color: "var(--color-accent)" }}
             >

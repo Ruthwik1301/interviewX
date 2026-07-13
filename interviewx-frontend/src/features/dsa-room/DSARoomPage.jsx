@@ -71,6 +71,26 @@ const DIFF_STYLE = {
   Hard: { bg: "#fee2e2", color: "#991b1b" },
 };
 
+function getBootErrorState(err) {
+  if (err instanceof ApiError && err.status === 429) {
+    return {
+      isLimit: true,
+      title: "Today's session limit reached",
+      message: err.message,
+      hint:
+        "You can come back after the daily limit resets, or upgrade your plan for more sessions per day.",
+    };
+  }
+
+  return {
+    isLimit: false,
+    title: "Couldn't start your DSA interview",
+    message:
+      err instanceof ApiError ? err.message : "Failed to load session.",
+    hint: "Please go back and try again.",
+  };
+}
+
 function fmtTime(s) {
   const m = Math.floor(s / 60);
   return `${String(m).padStart(2, "0")}:${String(s % 60).padStart(2, "0")}`;
@@ -412,7 +432,7 @@ export default function DSARoomPage() {
   const [submitting, setSubmitting] = useState(false);
   const [feedback, setFeedback] = useState(null);
   const [booting, setBooting] = useState(true);
-  const [error, setError] = useState("");
+  const [errorState, setErrorState] = useState(null);
   const [ending, setEnding] = useState(false);
   const [elapsed, setElapsed] = useState(0);
   const [langOpen, setLangOpen] = useState(false);
@@ -459,7 +479,12 @@ export default function DSARoomPage() {
         if (id === "start") {
           const { trackId, role, level } = routeState;
           if (!trackId) {
-            setError("No track selected.");
+            setErrorState({
+              isLimit: false,
+              title: "No DSA track selected",
+              message: "Please go back and choose a DSA track before starting.",
+              hint: "Your setup was missing the selected track.",
+            });
             setBooting(false);
             return;
           }
@@ -485,9 +510,7 @@ export default function DSARoomPage() {
         setQIndex(sess.currentQuestionIndex ?? 0);
         setBooting(false);
       } catch (err) {
-        setError(
-          err instanceof ApiError ? err.message : "Failed to load session.",
-        );
+        setErrorState(getBootErrorState(err));
         setBooting(false);
       }
     }
@@ -652,17 +675,43 @@ export default function DSARoomPage() {
       </>,
     );
 
-  if (error)
+  if (errorState)
     return darkCenter(
       <>
-        <p className="text-red-400 text-sm max-w-sm text-center">{error}</p>
-        <button
-          onClick={() => navigate("/app/interviews/new")}
-          className="rounded-xl px-5 py-2.5 text-sm font-semibold text-white"
-          style={{ background: "#7c3aed" }}
+        <p
+          className="text-sm font-semibold max-w-md text-center"
+          style={{ color: errorState.isLimit ? "#fbbf24" : "#f87171" }}
         >
-          Back to Interview Setup
-        </button>
+          {errorState.title}
+        </p>
+        <p className="text-sm max-w-md text-center text-gray-300">
+          {errorState.message}
+        </p>
+        <p className="text-xs max-w-md text-center text-gray-500">
+          {errorState.hint}
+        </p>
+        <div className="flex flex-wrap items-center justify-center gap-3">
+          <button
+            onClick={() => navigate("/app/interviews/new")}
+            className="rounded-xl px-5 py-2.5 text-sm font-semibold text-white"
+            style={{ background: "#7c3aed" }}
+          >
+            Back to Interview Setup
+          </button>
+          {errorState.isLimit && (
+            <button
+              onClick={() => window.location.assign("/#pricing")}
+              className="rounded-xl border px-5 py-2.5 text-sm font-semibold"
+              style={{
+                borderColor: "#7c3aed66",
+                color: "#c4b5fd",
+                background: "#7c3aed14",
+              }}
+            >
+              View Pricing
+            </button>
+          )}
+        </div>
       </>,
     );
 

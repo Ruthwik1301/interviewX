@@ -1,6 +1,6 @@
 import { useEffect, useState } from "react";
 import { motion } from "framer-motion";
-import { useNavigate } from "react-router-dom";
+import { useLocation, useNavigate } from "react-router-dom";
 import {
   Plus,
   BarChart3,
@@ -14,6 +14,8 @@ import {
   Network,
   ArrowRight,
   Calendar,
+  CheckCircle2,
+  AlertCircle,
 } from "lucide-react";
 import { RoutePaths } from "@/app/routes/paths";
 import { useAuth } from "@/app/providers/useAuth.js";
@@ -57,6 +59,36 @@ const QUICK_STARTS = [
   },
   { id: "hr", label: "HR Round", icon: Users, color: "#7c3aed" },
 ];
+
+const ENTITLED_SUBSCRIPTION_STATUSES = new Set([
+  "active",
+  "trialing",
+  "past_due",
+]);
+
+const PLAN_META = {
+  free: {
+    label: "Free",
+    dailyLimit: 2,
+    accent: "var(--color-text-muted)",
+    background: "var(--color-surface-3)",
+    border: "var(--color-border)",
+  },
+  pro: {
+    label: "Pro",
+    dailyLimit: 5,
+    accent: "var(--color-accent)",
+    background: "var(--color-accent-bg)",
+    border: "var(--color-accent-border)",
+  },
+  team: {
+    label: "Team",
+    dailyLimit: 3,
+    accent: "#0ea5e9",
+    background: "rgba(14,165,233,0.12)",
+    border: "rgba(14,165,233,0.25)",
+  },
+};
 
 function scoreColor(v) {
   return v >= 85
@@ -113,6 +145,48 @@ function computeStats(sessions) {
     ? formatDate(sessions[0].startedAt)
     : null;
   return { total, avgScore, totalTime, lastSession };
+}
+
+function getUtcDayRange(date = new Date()) {
+  const start = new Date(
+    Date.UTC(date.getUTCFullYear(), date.getUTCMonth(), date.getUTCDate()),
+  );
+  const end = new Date(start);
+  end.setUTCDate(end.getUTCDate() + 1);
+  return { start, end };
+}
+
+function getEffectivePlan(user) {
+  if (!user) return "free";
+  if (user.plan === "team") return "team";
+
+  return user.plan === "pro" &&
+    ENTITLED_SUBSCRIPTION_STATUSES.has(user.subscriptionStatus)
+    ? "pro"
+    : "free";
+}
+
+function computeDailyUsage(user, sessions) {
+  const plan = getEffectivePlan(user);
+  const meta = PLAN_META[plan] ?? PLAN_META.free;
+  const { start, end } = getUtcDayRange();
+  const usedToday = sessions.filter((session) => {
+    const ts = session.startedAt ?? session.createdAt;
+    if (!ts) return false;
+    const when = new Date(ts);
+    return when >= start && when < end;
+  }).length;
+
+  return {
+    plan,
+    label: meta.label,
+    dailyLimit: meta.dailyLimit,
+    usedToday,
+    remainingToday: Math.max(0, meta.dailyLimit - usedToday),
+    accent: meta.accent,
+    background: meta.background,
+    border: meta.border,
+  };
 }
 
 function computeSkillScores(sessions) {
@@ -277,13 +351,221 @@ function EmptyState({ onStart }) {
   );
 }
 
+function PlanUsageCard({ usage, loading, onUpgrade }) {
+  return (
+    <motion.div
+      initial={{ opacity: 0, y: 16 }}
+      animate={{ opacity: 1, y: 0 }}
+      transition={{ duration: 0.45, delay: 0.12 }}
+      className="overflow-hidden rounded-2xl border"
+      style={{
+        background: "var(--color-surface-1)",
+        borderColor: "var(--color-border-strong)",
+      }}
+    >
+      <div
+        className="border-b px-5 py-4"
+        style={{
+          borderColor: "var(--color-border)",
+          background: "var(--color-surface-2)",
+        }}
+      >
+        <span
+          className="text-sm font-semibold"
+          style={{ color: "var(--color-text-invert)" }}
+        >
+          Plan & Daily Limit
+        </span>
+        <p
+          className="mt-0.5 text-[11px]"
+          style={{ color: "var(--color-text-muted)" }}
+        >
+          Usage resets daily at 00:00 UTC
+        </p>
+      </div>
+
+      <div className="space-y-4 p-5">
+        <div className="flex items-start justify-between gap-3">
+          <div>
+            <p
+              className="text-[11px] font-bold uppercase tracking-wider"
+              style={{ color: "var(--color-text-muted)" }}
+            >
+              Current plan
+            </p>
+            <div className="mt-2 flex items-center gap-2">
+              <span
+                className="rounded-full border px-2.5 py-1 text-[11px] font-semibold"
+                style={{
+                  color: usage.accent,
+                  background: usage.background,
+                  borderColor: usage.border,
+                }}
+              >
+                {loading ? "Loading…" : usage.label}
+              </span>
+              {!loading && usage.plan === "pro" && (
+                <span
+                  className="text-[11px] font-medium"
+                  style={{ color: "var(--color-text-muted)" }}
+                >
+                  5 sessions/day
+                </span>
+              )}
+            </div>
+          </div>
+          {!loading && usage.plan === "free" && (
+            <button
+              onClick={onUpgrade}
+              className="shrink-0 rounded-xl px-3 py-2 text-[12px] font-semibold text-white"
+              style={{
+                background:
+                  "linear-gradient(135deg, var(--color-accent) 0%, #9333ea 100%)",
+              }}
+            >
+              Upgrade to Pro
+            </button>
+          )}
+        </div>
+
+        <div className="grid grid-cols-3 gap-3">
+          {[
+            {
+              label: "Daily limit",
+              value: loading ? "—" : usage.dailyLimit,
+            },
+            {
+              label: "Used today",
+              value: loading ? "—" : usage.usedToday,
+            },
+            {
+              label: "Remaining",
+              value: loading ? "—" : usage.remainingToday,
+            },
+          ].map((item) => (
+            <div
+              key={item.label}
+              className="rounded-xl border px-3 py-3 text-center"
+              style={{
+                background: "var(--color-surface-2)",
+                borderColor: "var(--color-border)",
+              }}
+            >
+              <p
+                className="text-lg font-bold"
+                style={{ color: "var(--color-text-invert)" }}
+              >
+                {item.value}
+              </p>
+              <p
+                className="mt-0.5 text-[10px] font-medium uppercase tracking-wider"
+                style={{ color: "var(--color-text-muted)" }}
+              >
+                {item.label}
+              </p>
+            </div>
+          ))}
+        </div>
+
+        <p className="text-[12px]" style={{ color: "var(--color-text-muted)" }}>
+          {loading
+            ? "Loading your current plan and daily usage…"
+            : usage.plan === "free"
+              ? "Free plan includes 2 interview sessions per UTC day. Upgrade to Pro to increase this to 5 sessions per day."
+              : usage.plan === "pro"
+                ? "Your Pro plan currently allows up to 5 interview sessions per UTC day."
+                : "Team plan is reserved for future team/member support. Current limits are shown per member."}
+        </p>
+      </div>
+    </motion.div>
+  );
+}
+
+function CheckoutBanner({ notice }) {
+  if (!notice) return null;
+
+  const Icon = notice.tone === "success" ? CheckCircle2 : AlertCircle;
+  const styles =
+    notice.tone === "success"
+      ? {
+          background: "var(--color-success-bg)",
+          borderColor: "var(--color-success-border)",
+          titleColor: "var(--color-success)",
+        }
+      : {
+          background: "var(--color-warning-bg)",
+          borderColor: "var(--color-warning-border)",
+          titleColor: "var(--color-warning)",
+        };
+
+  return (
+    <motion.div
+      initial={{ opacity: 0, y: 10 }}
+      animate={{ opacity: 1, y: 0 }}
+      className="mb-6 rounded-2xl border p-4 sm:p-5"
+      style={{
+        background: styles.background,
+        borderColor: styles.borderColor,
+      }}
+    >
+      <div className="flex items-start gap-3">
+        <div
+          className="mt-0.5 flex h-9 w-9 shrink-0 items-center justify-center rounded-xl"
+          style={{ background: "rgba(255,255,255,0.65)" }}
+        >
+          <Icon size={18} strokeWidth={2.2} style={{ color: styles.titleColor }} />
+        </div>
+        <div>
+          <p
+            className="text-sm font-semibold"
+            style={{ color: "var(--color-text-invert)" }}
+          >
+            {notice.title}
+          </p>
+          <p className="mt-1 text-[13px]" style={{ color: "var(--color-text)" }}>
+            {notice.message}
+          </p>
+        </div>
+      </div>
+    </motion.div>
+  );
+}
+
 export default function DashboardPage() {
   const navigate = useNavigate();
+  const location = useLocation();
   const { user } = useAuth();
   const firstName = user?.name?.trim().split(/\s+/)[0];
 
   const [sessions, setSessions] = useState([]);
   const [loading, setLoading] = useState(true);
+  const [checkoutNotice, setCheckoutNotice] = useState(null);
+
+  useEffect(() => {
+    const params = new URLSearchParams(location.search);
+    const checkout = params.get("checkout");
+
+    if (checkout === "success") {
+      setCheckoutNotice({
+        tone: "success",
+        title: "Payment successful",
+        message:
+          "Your Stripe checkout completed successfully. Your Pro subscription is being synced now. If your upgraded limits do not appear immediately, refresh in a few seconds.",
+      });
+      navigate(location.pathname, { replace: true });
+      return;
+    }
+
+    if (checkout === "cancelled") {
+      setCheckoutNotice({
+        tone: "warning",
+        title: "Checkout cancelled",
+        message:
+          "Your Stripe checkout was cancelled, so your current plan has not changed. You can try again anytime from pricing.",
+      });
+      navigate(location.pathname, { replace: true });
+    }
+  }, [location.pathname, location.search, navigate]);
 
   useEffect(() => {
     api
@@ -297,6 +579,7 @@ export default function DashboardPage() {
   const skillScores = computeSkillScores(sessions);
   const weakest = lowestSkill(skillScores);
   const recentSessions = sessions.slice(0, 5);
+  const planUsage = computeDailyUsage(user, sessions);
 
   const statCards = [
     {
@@ -386,6 +669,8 @@ export default function DashboardPage() {
             New Interview
           </motion.button>
         </motion.div>
+
+        <CheckoutBanner notice={checkoutNotice} />
 
         {/* Stats */}
         <motion.div
@@ -544,6 +829,12 @@ export default function DashboardPage() {
 
           {/* Right column */}
           <div className="flex flex-col gap-6">
+            <PlanUsageCard
+              usage={planUsage}
+              loading={loading}
+              onUpgrade={() => window.location.assign("/#pricing")}
+            />
+
             {/* Quick start */}
             <motion.div
               initial={{ opacity: 0, y: 16 }}

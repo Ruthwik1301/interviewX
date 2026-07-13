@@ -1,5 +1,11 @@
 import mongoose from "mongoose";
 import bcrypt from "bcryptjs";
+import {
+  PLAN_KEYS,
+  SUBSCRIPTION_STATUS,
+  USER_PLAN_VALUES,
+  STRIPE_SUBSCRIPTION_STATUS_VALUES,
+} from "../config/billing.js";
 
 const TRACK_KEYS = [
   "Technical",
@@ -15,6 +21,8 @@ const NOTIF_KEYS = [
   "New question packs",
   "Session completion summary",
 ];
+
+const TEAM_ROLE_VALUES = ["owner", "admin", "member"];
 
 function defaultMap(keys, value) {
   return keys.reduce((acc, k) => ({ ...acc, [k]: value }), {});
@@ -46,6 +54,46 @@ const userSchema = new mongoose.Schema(
       default: () => defaultMap(NOTIF_KEYS, true),
     },
 
+    // ── Billing / subscriptions ─────────────────────────────────────────────
+    plan: {
+      type: String,
+      enum: USER_PLAN_VALUES,
+      default: PLAN_KEYS.FREE,
+      index: true,
+    },
+    stripeCustomerId: {
+      type: String,
+      default: null,
+      index: true,
+      sparse: true,
+    },
+    stripeSubscriptionId: {
+      type: String,
+      default: null,
+      index: true,
+      sparse: true,
+    },
+    subscriptionStatus: {
+      type: String,
+      enum: STRIPE_SUBSCRIPTION_STATUS_VALUES,
+      default: SUBSCRIPTION_STATUS.NOT_STARTED,
+      index: true,
+    },
+    subscriptionCurrentPeriodEnd: { type: Date, default: null },
+
+    // ── Team membership foundation ─────────────────────────────────────────
+    activeTeam: {
+      type: mongoose.Schema.Types.ObjectId,
+      ref: "Team",
+      default: null,
+      index: true,
+    },
+    teamRole: {
+      type: String,
+      enum: TEAM_ROLE_VALUES,
+      default: null,
+    },
+
     // ── Email verification ──────────────────────────────────────────────────
     emailVerified: { type: Boolean, default: false },
     verifyToken: { type: String, default: null, index: true },
@@ -57,7 +105,11 @@ const userSchema = new mongoose.Schema(
 
     // ── OAuth ───────────────────────────────────────────────────────────────
     googleId: { type: String, default: null, index: true, sparse: true },
-    authProvider: { type: String, default: "local", enum: ["local", "google"] },
+    authProvider: {
+      type: String,
+      default: "local",
+      enum: ["local", "google"],
+    },
   },
   { timestamps: true },
 );
@@ -83,9 +135,14 @@ userSchema.methods.toPublicJSON = function toPublicJSON() {
     notifications: Object.fromEntries(this.notifications ?? []),
     emailVerified: this.emailVerified,
     authProvider: this.authProvider,
+    plan: this.plan,
+    subscriptionStatus: this.subscriptionStatus,
+    subscriptionCurrentPeriodEnd: this.subscriptionCurrentPeriodEnd,
+    activeTeam: this.activeTeam?.toString?.() ?? this.activeTeam ?? null,
+    teamRole: this.teamRole,
     createdAt: this.createdAt,
   };
 };
 
 export const User = mongoose.model("User", userSchema);
-export { TRACK_KEYS, NOTIF_KEYS };
+export { TRACK_KEYS, NOTIF_KEYS, TEAM_ROLE_VALUES };

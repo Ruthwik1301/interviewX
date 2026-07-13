@@ -15,6 +15,11 @@ export default function LoginPage() {
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
 
+  const query = new URLSearchParams(location.search);
+  const hasTeamInvite = Boolean(query.get("teamInviteToken"));
+  const inviteAwarePath = (path) =>
+    hasTeamInvite ? `${path}${location.search}` : path;
+
   async function handleSubmit(e) {
     e.preventDefault();
     if (!email || !password) {
@@ -93,6 +98,28 @@ export default function LoginPage() {
             </p>
           </div>
 
+          {/* Team invite context */}
+          {hasTeamInvite && (
+            <motion.div
+              initial={{ opacity: 0, y: -8 }}
+              animate={{ opacity: 1, y: 0 }}
+              className="mb-5 rounded-xl border px-4 py-3 text-sm"
+              style={{
+                background: "var(--color-accent-bg)",
+                borderColor: "var(--color-accent-border)",
+                color: "var(--color-text)",
+              }}
+            >
+              <p className="font-semibold" style={{ color: "var(--color-accent)" }}>
+                Team invite detected
+              </p>
+              <p className="mt-1 leading-relaxed">
+                Log in with the invited email address to continue and accept your
+                team invite from the Profile page.
+              </p>
+            </motion.div>
+          )}
+
           {/* Error */}
           {error && (
             <motion.div
@@ -148,7 +175,7 @@ export default function LoginPage() {
                 </label>
                 {/* ← Real link now */}
                 <Link
-                  to={RoutePaths.forgotPassword}
+                  to={inviteAwarePath(RoutePaths.forgotPassword)}
                   className="text-[12px] transition-colors hover:underline"
                   style={{ color: "var(--color-accent)" }}
                 >
@@ -281,7 +308,7 @@ export default function LoginPage() {
           >
             Don't have an account?{" "}
             <NavLink
-              to={RoutePaths.register}
+              to={inviteAwarePath(RoutePaths.register)}
               className="font-semibold transition-colors hover:text-[color:var(--color-text-invert)]"
               style={{ color: "var(--color-accent)" }}
             >

@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { useNavigate, useParams, useLocation } from "react-router-dom";
 import { motion, AnimatePresence } from "framer-motion";
 import { api, ApiError } from "@/shared/lib/api.js";
@@ -10,6 +10,11 @@ import ControlBar from "./components/ControlBar";
 // A module-level set lets us track which "start" navigations are already
 // in-flight so the second mount doesn't fire a second POST /api/interviews.
 const inFlight = new Set();
+const APTITUDE_TRACKS = [
+  "numerical-reasoning",
+  "logical-reasoning",
+  "verbal-ability",
+];
 
 function msgId() {
   return Math.random().toString(36).slice(2);
@@ -17,6 +22,20 @@ function msgId() {
 
 function fmtTime(date) {
   return date.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
+}
+
+function parseAptitudeQuestion(raw) {
+  if (typeof raw === "object" && raw !== null) return raw;
+  if (typeof raw !== "string") return null;
+
+  const trimmed = raw.trim();
+  if (!trimmed.startsWith("{")) return null;
+
+  try {
+    return JSON.parse(trimmed);
+  } catch {
+    return null;
+  }
 }
 
 function CenteredMessage({ children }) {
@@ -47,6 +66,104 @@ function Spinner({ label }) {
   );
 }
 
+function AptitudePanel({ question, onChoose, disabled }) {
+  if (!question) return null;
+
+  const meta = [question.category, question.topic, question.difficulty]
+    .filter(Boolean)
+    .join(" · ");
+
+  return (
+    <div
+      className="shrink-0 rounded-2xl border p-4 sm:p-5"
+      style={{
+        background: "var(--color-surface-1)",
+        borderColor: "var(--color-border-strong)",
+      }}
+    >
+      <div className="mb-3">
+        <p
+          className="text-[11px] font-bold uppercase tracking-wider"
+          style={{ color: "var(--color-text-muted)" }}
+        >
+          Aptitude Question
+        </p>
+        <p
+          className="mt-1 text-sm font-semibold"
+          style={{ color: "var(--color-text-invert)" }}
+        >
+          {question.title ?? "Question"}
+        </p>
+        {meta && (
+          <p className="mt-1 text-[12px]" style={{ color: "var(--color-text-muted)" }}>
+            {meta}
+          </p>
+        )}
+      </div>
+
+      <p
+        className="mb-4 text-sm leading-relaxed"
+        style={{ color: "var(--color-text)" }}
+      >
+        {question.question ?? question.description ?? ""}
+      </p>
+
+      {Array.isArray(question.options) && question.options.length > 0 && (
+        <div className="grid grid-cols-1 gap-2">
+          {question.options.map((option) => (
+            <button
+              key={option.id}
+              type="button"
+              onClick={() => onChoose(option.id)}
+              disabled={disabled}
+              className="rounded-xl border px-4 py-3 text-left text-sm transition-colors disabled:cursor-not-allowed disabled:opacity-60"
+              style={{
+                background: "var(--color-surface-2)",
+                borderColor: "var(--color-border)",
+                color: "var(--color-text)",
+              }}
+            >
+              <span
+                className="mr-2 inline-flex min-w-6 font-semibold"
+                style={{ color: "var(--color-accent)" }}
+              >
+                {option.id}.
+              </span>
+              {option.text}
+            </button>
+          ))}
+        </div>
+      )}
+
+      <p className="mt-3 text-[11px]" style={{ color: "var(--color-text-muted)" }}>
+        You can click an option, type the letter, or type the full answer text.
+      </p>
+    </div>
+  );
+}
+
+function getBootErrorState(err) {
+  if (err instanceof ApiError && err.status === 429) {
+    return {
+      isLimit: true,
+      title: "Today's session limit reached",
+      message: err.message,
+      hint:
+        "You can start another interview after the daily limit resets, or upgrade your plan for more sessions per day.",
+    };
+  }
+
+  return {
+    isLimit: false,
+    title: "Couldn't start your interview",
+    message:
+      err instanceof ApiError
+        ? err.message
+        : "Something went wrong starting your session.",
+    hint: "Please go back and try again.",
+  };
+}
+
 export default function InterviewRoomPage() {
   const { id } = useParams();
   const location = useLocation();
@@ -59,25 +176,30 @@ export default function InterviewRoomPage() {
   const [isListening, setIsListening] = useState(false);
   const [answeredScores, setAnsweredScores] = useState([]);
   const [lastFeedback, setLastFeedback] = useState("");
-  const [error, setError] = useState("");
+  const [errorState, setErrorState] = useState(null);
   const [booting, setBooting] = useState(true); // waiting for session to exist
   const [ending, setEnding] = useState(false);
 
   // Stable ref to the live session ID (may start as "start" then get replaced)
   const sessionIdRef = useRef(id === "start" ? null : id);
 
+  const isAptitude = APTITUDE_TRACKS.includes(session?.trackId);
+  const currentAptitudeQuestion = useMemo(() => {
+    if (!isAptitude || !session) return null;
+    return parseAptitudeQuestion(
+      session.questions?.[session.currentQuestionIndex] ?? null,
+    );
+  }, [isAptitude, session]);
+
   // ─── Boot: create or load the session ────────────────────────────────────
   useEffect(() => {
-    // Key that's unique to this mount's intent. If id is "start" we use the
-    // route-state trackId so StrictMode's second mount sees the same key and
-    // skips. For real IDs we use the ID directly.
     const routeState = location.state ?? {};
     const flightKey =
       id === "start"
         ? `start:${routeState.trackId ?? "unknown"}`
         : `load:${id}`;
 
-    if (inFlight.has(flightKey)) return; // StrictMode second mount — bail
+    if (inFlight.has(flightKey)) return;
     inFlight.add(flightKey);
 
     let cancelled = false;
@@ -87,12 +209,14 @@ export default function InterviewRoomPage() {
         let sess;
 
         if (id === "start") {
-          // Create a new session from route state set by CreateInterviewPage
           const { trackId, role, level } = routeState;
           if (!trackId) {
-            setError(
-              "No interview track selected. Please go back and choose one.",
-            );
+            setErrorState({
+              isLimit: false,
+              title: "No interview track selected",
+              message: "Please go back and choose a track before starting.",
+              hint: "Your setup was missing the selected track.",
+            });
             setBooting(false);
             inFlight.delete(flightKey);
             return;
@@ -108,19 +232,16 @@ export default function InterviewRoomPage() {
           sess = data.session;
           sessionIdRef.current = sess.id;
 
-          // Replace the placeholder URL with the real session ID so refresh works
           navigate(`/app/interviews/${sess.id}`, {
             replace: true,
             state: null,
           });
         } else {
-          // Resume / re-enter an existing session
           const data = await api.get(`/api/interviews/${id}`);
           if (cancelled) return;
           sess = data.session;
           sessionIdRef.current = sess.id;
 
-          // If it's already done, send to the report instead
           if (sess.status === "completed") {
             navigate(`/app/reports/${sess.id}`, { replace: true });
             return;
@@ -129,7 +250,6 @@ export default function InterviewRoomPage() {
 
         if (cancelled) return;
 
-        // Hydrate local message list from transcript
         const hydratedMessages = (sess.transcript ?? []).map((m) => ({
           id: msgId(),
           role: m.role,
@@ -137,7 +257,6 @@ export default function InterviewRoomPage() {
           time: fmtTime(new Date(m.timestamp ?? Date.now())),
         }));
 
-        // Hydrate scores from already-answered questions
         const scores = (sess.answers ?? []).map((a) => a.score);
         const lastFb = sess.answers?.at(-1)?.feedback ?? "";
 
@@ -148,11 +267,7 @@ export default function InterviewRoomPage() {
         setBooting(false);
       } catch (err) {
         if (cancelled) return;
-        setError(
-          err instanceof ApiError
-            ? err.message
-            : "Something went wrong starting your session.",
-        );
+        setErrorState(getBootErrorState(err));
         setBooting(false);
       } finally {
         inFlight.delete(flightKey);
@@ -163,11 +278,9 @@ export default function InterviewRoomPage() {
 
     return () => {
       cancelled = true;
-      // Don't delete from inFlight here — we want the second StrictMode mount
-      // to still see the key until the async work is complete.
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []); // intentionally empty — boot runs exactly once per real mount
+  }, []);
 
   // ─── Speech recognition (optional, degrades gracefully) ──────────────────
   const recognitionRef = useRef(null);
@@ -176,7 +289,7 @@ export default function InterviewRoomPage() {
     if (
       !("webkitSpeechRecognition" in window || "SpeechRecognition" in window)
     ) {
-      return; // browser unsupported — mic button just does nothing
+      return;
     }
 
     if (isListening) {
@@ -194,7 +307,6 @@ export default function InterviewRoomPage() {
       const transcript = Array.from(e.results)
         .map((r) => r[0].transcript)
         .join(" ");
-      // Append to the ControlBar textarea via a custom event the ControlBar listens for
       window.dispatchEvent(
         new CustomEvent("ix:transcript", { detail: transcript }),
       );
@@ -214,7 +326,6 @@ export default function InterviewRoomPage() {
     const isSkip = text === "__skip__";
     const displayText = isSkip ? "(skipped)" : text;
 
-    // Optimistically add user message
     const userMsg = {
       id: msgId(),
       role: "user",
@@ -232,14 +343,14 @@ export default function InterviewRoomPage() {
 
       const { score, feedback, nextQuestion, isComplete } = data;
 
-      // score is null until batch scoring at session end — track answer count instead
-      if (score !== null && score !== undefined)
+      if (score !== null && score !== undefined) {
         setAnsweredScores((prev) => [...prev, score]);
-      else setAnsweredScores((prev) => [...prev, 0]); // placeholder
+      } else {
+        setAnsweredScores((prev) => [...prev, 0]);
+      }
       setLastFeedback(feedback);
 
       if (isComplete) {
-        // Show a "wrapping up" message, then complete
         const doneMsg = {
           id: msgId(),
           role: "ai",
@@ -285,14 +396,12 @@ export default function InterviewRoomPage() {
     }
   }
 
-  // ─── End session early ────────────────────────────────────────────────────
   async function handleEnd() {
     const sid = sessionIdRef.current;
     if (!sid || ending) return;
 
     const hasAnswers = answeredScores.length > 0;
     if (!hasAnswers) {
-      // Can't complete with zero answers — just go home
       navigate("/app", { replace: true });
       return;
     }
@@ -302,35 +411,61 @@ export default function InterviewRoomPage() {
       await api.post(`/api/interviews/${sid}/complete`, {});
       navigate(`/app/reports/${sid}`, { replace: true });
     } catch {
-      // Even if complete fails, try to navigate — report page will poll
       navigate(`/app/reports/${sid}`, { replace: true });
     }
   }
 
-  // ─── Render ───────────────────────────────────────────────────────────────
   if (booting) {
     return <Spinner label="Setting up your interview session…" />;
   }
 
-  if (error) {
+  if (errorState) {
     return (
       <CenteredMessage>
         <p
-          className="mb-4 text-sm font-semibold"
-          style={{ color: "var(--color-error)" }}
-        >
-          {error}
-        </p>
-        <button
-          onClick={() => navigate("/app/interviews/new")}
-          className="rounded-xl px-5 py-2.5 text-sm font-semibold text-white"
+          className="mb-2 text-base font-semibold"
           style={{
-            background:
-              "linear-gradient(135deg, var(--color-accent) 0%, #9333ea 100%)",
+            color: errorState.isLimit
+              ? "var(--color-warning)"
+              : "var(--color-error)",
           }}
         >
-          Back to Interview Setup
-        </button>
+          {errorState.title}
+        </p>
+        <p className="mb-2 text-sm" style={{ color: "var(--color-text)" }}>
+          {errorState.message}
+        </p>
+        <p
+          className="mb-5 text-xs leading-relaxed"
+          style={{ color: "var(--color-text-muted)" }}
+        >
+          {errorState.hint}
+        </p>
+        <div className="flex flex-wrap items-center justify-center gap-3">
+          <button
+            onClick={() => navigate("/app/interviews/new")}
+            className="rounded-xl px-5 py-2.5 text-sm font-semibold text-white"
+            style={{
+              background:
+                "linear-gradient(135deg, var(--color-accent) 0%, #9333ea 100%)",
+            }}
+          >
+            Back to Interview Setup
+          </button>
+          {errorState.isLimit && (
+            <button
+              onClick={() => window.location.assign("/#pricing")}
+              className="rounded-xl border px-5 py-2.5 text-sm font-semibold"
+              style={{
+                borderColor: "var(--color-accent-border)",
+                color: "var(--color-accent)",
+                background: "var(--color-accent-bg)",
+              }}
+            >
+              View Pricing
+            </button>
+          )}
+        </div>
       </CenteredMessage>
     );
   }
@@ -353,7 +488,6 @@ export default function InterviewRoomPage() {
         className="flex h-full w-full flex-col"
         style={{ background: "var(--color-bg)" }}
       >
-        {/* Header bar */}
         <div
           className="shrink-0 border-b px-5 py-3 flex items-center justify-between"
           style={{
@@ -395,9 +529,7 @@ export default function InterviewRoomPage() {
           </span>
         </div>
 
-        {/* Main two-column layout */}
         <div className="flex flex-1 min-h-0 gap-4 p-4 sm:p-5">
-          {/* Transcript (left / main) */}
           <div className="flex flex-col flex-1 min-h-0 min-w-0 gap-4">
             <div className="flex-1 min-h-0">
               <TranscriptPanel
@@ -406,16 +538,23 @@ export default function InterviewRoomPage() {
                 isListening={isListening}
               />
             </div>
+            {isAptitude && currentAptitudeQuestion && (
+              <AptitudePanel
+                question={currentAptitudeQuestion}
+                onChoose={(optionId) => handleSend(optionId)}
+                disabled={isAiTyping}
+              />
+            )}
             <ControlBar
               isListening={isListening}
               onToggleListen={toggleListen}
               onSend={handleSend}
               onEnd={handleEnd}
               isAiTyping={isAiTyping}
+              isIntroPhase={session?.introPhase}
             />
           </div>
 
-          {/* Scorecard (right sidebar, hidden on small screens) */}
           <div className="hidden lg:flex w-72 xl:w-80 shrink-0 flex-col min-h-0">
             <ScorecardPanel
               answeredScores={answeredScores}

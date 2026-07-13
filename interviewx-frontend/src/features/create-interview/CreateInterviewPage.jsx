@@ -21,6 +21,9 @@ import {
   Briefcase,
   Star,
   Zap,
+  Calculator,
+  Brain,
+  BookOpen,
 } from "lucide-react";
 
 // ─── Track definitions grouped by category ───────────────────────────────────
@@ -56,6 +59,51 @@ const CATEGORIES = [
         difficulty: "Hard",
         role: "Software Engineer",
         companies: "Google · Meta · Stripe",
+      },
+    ],
+  },
+  {
+    id: "aptitude",
+    label: "Aptitude",
+    description: "Curated objective questions across reasoning and verbal skills",
+    color: "#8b5cf6",
+    tracks: [
+      {
+        id: "numerical-reasoning",
+        icon: Calculator,
+        title: "Numerical Reasoning",
+        description:
+          "Percentages, ratios, averages, work/time, and quantitative problem solving.",
+        duration: "20 min",
+        questions: 5,
+        difficulty: "Easy–Medium",
+        role: "Aptitude Candidate",
+        tag: "New",
+        companies: "Campus drives · Assessments · Screening rounds",
+      },
+      {
+        id: "logical-reasoning",
+        icon: Brain,
+        title: "Logical Reasoning",
+        description:
+          "Series, analogies, arrangements, direction sense, syllogisms, and pattern logic.",
+        duration: "20 min",
+        questions: 5,
+        difficulty: "Easy–Medium",
+        role: "Aptitude Candidate",
+        companies: "Campus drives · Assessments · Screening rounds",
+      },
+      {
+        id: "verbal-ability",
+        icon: BookOpen,
+        title: "Verbal Ability",
+        description:
+          "Vocabulary, grammar, sentence completion, inference, and communication aptitude.",
+        duration: "20 min",
+        questions: 5,
+        difficulty: "Easy–Medium",
+        role: "Aptitude Candidate",
+        companies: "Campus drives · Assessments · Screening rounds",
       },
     ],
   },

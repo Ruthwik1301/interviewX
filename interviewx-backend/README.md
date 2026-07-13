@@ -1,101 +1,415 @@
 # InterviewX Backend
 
-Node.js + Express + MongoDB API for InterviewX. Handles real user accounts (JWT auth),
-persisted interview sessions, and AI-generated interview questions + feedback via Groq
-(free tier, open-source models).
+Express + MongoDB backend for InterviewX.
+
+This backend currently supports:
+- JWT authentication
+- Google OAuth
+- email verification + password reset emails via Resend
+- regular interview sessions
+- DSA interview sessions with JDoodle-backed code execution proxy
+- aptitude tracks from a curated question bank
+- Stripe checkout + webhook sync + billing portal foundations
+- team model + team membership foundations
+- backend-enforced daily session limits
+- rate limiting
+
+## Current scoring architecture
+
+### Regular interview tracks
+Groq is limited to a maximum of **2 calls per regular session**:
+1. `scoreIntro()`
+2. `batchScoreAnswers()`
+
+Question generation comes from curated banks.
+Final reports are calculated mathematically.
+
+### DSA tracks
+DSA questions remain structured objects serialized as JSON strings in MongoDB.
+Answers are batch-evaluated at completion.
+
+### Aptitude tracks
+Aptitude questions come from a curated structured bank.
+They use deterministic scoring from correct answers and explanations.
+No extra Groq calls are introduced for aptitude.
+
+---
 
 ## Stack
 
-- **Express** — REST API
-- **MongoDB / Mongoose** — data storage (Users, InterviewSessions)
-- **JWT** — stateless auth, sent as `Authorization: Bearer <token>`
-- **Groq** — generates interview questions, scores answers, writes final reports
-  (falls back to a static question bank / heuristic scoring if Groq is unreachable
-  or rate-limited, so the product never breaks)
+- **Node.js / Express 4**
+- **MongoDB / Mongoose**
+- **JWT**
+- **bcryptjs**
+- **passport-google-oauth20**
+- **Groq** (`llama-3.3-70b-versatile` by default)
+- **Resend**
+- **JDoodle** backend proxy
+- **Stripe** via backend API calls
+- **express-rate-limit**
 
-## 1. Get your free services
+---
 
-### MongoDB Atlas (free tier)
-1. Sign up at https://www.mongodb.com/cloud/atlas/register
-2. Create a free (M0) cluster
-3. Database Access → add a database user + password
-4. Network Access → allow access from anywhere (`0.0.0.0/0`) for now
-5. Connect → "Drivers" → copy the connection string
-
-### Groq (free tier, no credit card)
-1. Sign up at https://console.groq.com
-2. Go to API Keys → create a new key
-3. Free tier covers prototyping (~30 requests/min). Plenty for development and demos.
-
-## 2. Local setup
+## Local backend setup
 
 ```bash
 cd interviewx-backend
 npm install
 cp .env.example .env
-# edit .env: paste your MongoDB URI, a random JWT secret, and your Groq API key
 npm run dev
 ```
 
 Generate a JWT secret quickly with:
+
 ```bash
 openssl rand -hex 32
 ```
 
-Server runs on `http://localhost:5000` by default. Check it's alive:
+Default local backend URL:
+
+```txt
+http://localhost:5000
+```
+
+Health check:
+
 ```bash
 curl http://localhost:5000/health
 ```
 
-## 3. API overview
+---
 
-All authenticated routes require `Authorization: Bearer <token>` header.
+## Environment variables
 
-| Method | Route                          | Auth | Description                              |
-|--------|--------------------------------|------|-------------------------------------------|
-| POST   | `/api/auth/register`           | No   | Create account, returns token + user      |
-| POST   | `/api/auth/login`              | No   | Login, returns token + user               |
-| GET    | `/api/auth/me`                 | Yes  | Get current user                          |
-| GET    | `/api/profile`                 | Yes  | Get profile                               |
-| PUT    | `/api/profile`                 | Yes  | Update name/role/target/tracks/notifications |
-| POST   | `/api/interviews`              | Yes  | Start a session (`{ trackId, role, level }`), AI-generates questions |
-| GET    | `/api/interviews`               | Yes  | List your past sessions                  |
-| GET    | `/api/interviews/:id`           | Yes  | Get one session                          |
-| POST   | `/api/interviews/:id/answer`    | Yes  | Submit an answer (`{ answer }`), get score + feedback + next question |
-| POST   | `/api/interviews/:id/complete`  | Yes  | Finalize session, AI-generates full report |
+Use `interviewx-backend/.env.example` as the source of truth.
 
-`trackId` must be one of: `technical`, `coding`, `cybersecurity`, `system-design`, `hr`.
+### Required in all environments
 
-## 4. Connecting the React frontend
+- `MONGODB_URI`
+- `JWT_SECRET`
+- `GROQ_API_KEY`
 
-In the frontend, replace the `localStorage`-based `AuthProvider` calls with real
-`fetch`/`axios` calls to these endpoints, store the returned JWT (e.g. in
-`localStorage` or memory + httpOnly cookie if you upgrade later), and send it
-as the `Authorization` header on every authenticated request.
+### Required in production
 
-Set `CORS_ORIGIN` in `.env` to match wherever the frontend is running
-(`http://localhost:5173` for local Vite dev, or your deployed frontend URL).
+- `CORS_ORIGIN`
+- `APP_URL`
+- `RESEND_API_KEY`
+- `EMAIL_FROM`
+- `GOOGLE_CLIENT_ID`
+- `GOOGLE_CLIENT_SECRET`
+- `GOOGLE_CALLBACK_URL`
+- `JDOODLE_CLIENT_ID`
+- `JDOODLE_CLIENT_SECRET`
+- `STRIPE_SECRET_KEY`
+- `STRIPE_WEBHOOK_SECRET`
+- `STRIPE_PRICE_ID_PRO`
+- `STRIPE_PRICE_ID_TEAM`
 
-## 5. Deploying (Render / Railway)
+### Optional
 
-Both work the same way:
+- `PORT`
+- `JWT_EXPIRES_IN`
+- `GROQ_MODEL`
+- `STRIPE_CHECKOUT_SUCCESS_URL`
+- `STRIPE_CHECKOUT_CANCEL_URL`
 
-1. Push this `interviewx-backend` folder to its own GitHub repo (or a subfolder of your monorepo)
-2. Create a new **Web Service** on Render or Railway, point it at the repo
-3. Build command: `npm install`
-4. Start command: `npm start`
-5. Add the same environment variables from `.env` in the dashboard's Environment/Variables section
-6. Update `MONGODB_URI`'s Network Access in Atlas to allow your hosting provider's IPs
-   (or keep `0.0.0.0/0` for simplicity while prototyping)
-7. Once deployed, update `CORS_ORIGIN` to your real frontend URL, and update the
-   frontend's API base URL to point at your new backend URL
+### Important notes
 
-## Notes
+- `CORS_ORIGIN` may be a single origin or a comma-separated list.
+- `APP_URL` must be your frontend base URL.
+- `GOOGLE_CLIENT_ID` and `GOOGLE_CLIENT_SECRET` must be set together.
+- `JDOODLE_CLIENT_ID` and `JDOODLE_CLIENT_SECRET` must be set together.
+- Never expose backend secrets in the frontend.
 
-- Passwords are hashed with bcrypt, never stored in plaintext.
-- Groq calls are wrapped in try/catch with graceful fallbacks everywhere — if the
-  free tier rate limit is hit, the app keeps working with static questions and
-  heuristic scoring instead of erroring out.
-- This is a prototype-grade backend: no email verification, password reset,
-  or refresh-token rotation yet. Good enough for a demo / early product, not
-  yet hardened for a large-scale production launch.
+---
+
+## Frontend deployment contract
+
+The frontend uses exactly one required environment variable:
+
+```txt
+VITE_API_URL
+```
+
+See:
+- `interviewx-frontend/.env.example`
+
+### Local example
+
+```txt
+VITE_API_URL=http://localhost:5000
+```
+
+### Production example
+
+```txt
+VITE_API_URL=https://your-backend-production-domain.up.railway.app
+```
+
+### Important frontend/backend alignment
+
+For production to work correctly:
+- frontend on **Vercel** must point `VITE_API_URL` to the **Railway backend URL**
+- backend `APP_URL` must point to the **Vercel frontend URL**
+- backend `CORS_ORIGIN` must include the **Vercel frontend URL**
+
+---
+
+## OAuth production alignment
+
+InterviewX uses backend-driven Google OAuth.
+
+### Backend env
+
+Set:
+
+```txt
+APP_URL=https://your-frontend.vercel.app
+GOOGLE_CALLBACK_URL=https://your-backend.up.railway.app/api/auth/google/callback
+```
+
+### Google Cloud Console
+
+Configure the Google OAuth app with:
+- **Authorized redirect URI**:
+  - `https://your-backend.up.railway.app/api/auth/google/callback`
+
+The backend completes OAuth and then redirects users back to:
+
+```txt
+${APP_URL}/auth/google/success?token=...
+```
+
+So your deployed frontend URL and backend callback URL must both be correct.
+
+---
+
+## Stripe production alignment
+
+InterviewX currently supports:
+- Pro checkout
+- Team checkout foundation
+- webhook sync
+- billing portal foundations
+
+### Backend env
+
+Set at minimum:
+
+```txt
+STRIPE_SECRET_KEY=...
+STRIPE_WEBHOOK_SECRET=...
+STRIPE_PRICE_ID_PRO=price_...
+STRIPE_PRICE_ID_TEAM=price_...
+```
+
+Optional explicit redirects:
+
+```txt
+STRIPE_CHECKOUT_SUCCESS_URL=https://your-frontend.vercel.app/app?checkout=success&session_id={CHECKOUT_SESSION_ID}
+STRIPE_CHECKOUT_CANCEL_URL=https://your-frontend.vercel.app/app?checkout=cancelled
+```
+
+If you omit them, the backend falls back to `APP_URL`.
+
+### Stripe Dashboard setup
+
+Create a webhook endpoint pointing to:
+
+```txt
+https://your-backend.up.railway.app/api/payments/webhook
+```
+
+Use the signing secret from Stripe as:
+
+```txt
+STRIPE_WEBHOOK_SECRET
+```
+
+### Billing portal / return flow
+
+The backend returns billing portal sessions that send users back to frontend profile routes, so `APP_URL` must always match the deployed frontend domain.
+
+---
+
+## JDoodle production alignment
+
+The frontend never talks to JDoodle directly.
+Only the backend uses:
+- `JDOODLE_CLIENT_ID`
+- `JDOODLE_CLIENT_SECRET`
+
+Make sure both are configured in Railway before using the DSA run-code flow in production.
+
+---
+
+## Resend production alignment
+
+To send real production emails:
+- configure `RESEND_API_KEY`
+- use a verified sender/domain in `EMAIL_FROM`
+
+Examples of email flows currently supported:
+- verify email
+- password reset
+- team invite email foundations
+
+---
+
+## MongoDB Atlas production alignment
+
+Use a production Atlas URI in:
+
+```txt
+MONGODB_URI
+```
+
+Also verify:
+- database user credentials are correct
+- Atlas network access allows Railway connectivity
+
+---
+
+## Railway backend deployment checklist
+
+1. Deploy `interviewx-backend` as a Railway service.
+2. Set start command:
+
+```txt
+npm start
+```
+
+3. Add all production backend environment variables.
+4. Confirm Railway public backend URL.
+5. Update:
+- `APP_URL`
+- `CORS_ORIGIN`
+- `GOOGLE_CALLBACK_URL`
+- Stripe webhook endpoint in Stripe dashboard
+
+6. Test:
+- `/health`
+- register/login
+- Google login
+- password reset email
+- Pro checkout
+- webhook delivery
+- billing portal
+- DSA run-code flow
+
+---
+
+## Vercel frontend deployment checklist
+
+1. Deploy `interviewx-frontend` to Vercel.
+2. Set:
+
+```txt
+VITE_API_URL=https://your-backend.up.railway.app
+```
+
+3. Redeploy frontend after env changes.
+4. Verify:
+- auth works
+- interview creation works
+- reports load
+- checkout redirects work
+- Google OAuth lands back correctly
+
+---
+
+## Rate limiting / proxy notes
+
+The backend is configured with rate limiting and proxy awareness for production.
+Because Railway sits behind a proxy, the app uses `trust proxy` so IP-based rate limiting behaves correctly.
+
+The Stripe webhook route is intentionally excluded from general API rate limiting so webhook delivery is not broken.
+
+---
+
+## API overview (high level)
+
+All authenticated routes require:
+
+```txt
+Authorization: Bearer <token>
+```
+
+Key route groups:
+- `/api/auth/*`
+- `/api/profile`
+- `/api/interviews/*`
+- `/api/run`
+- `/api/payments/*`
+- `/api/team/*`
+
+---
+
+## Validation commands
+
+Backend syntax check:
+
+```bash
+node --check src/config/env.js
+```
+
+Frontend production build:
+
+```bash
+cd ../interviewx-frontend
+npm run build
+```
+
+---
+
+## Important implementation notes
+
+- DSA questions must remain structured objects serialized as JSON strings in MongoDB.
+- Groq usage must remain capped at 2 calls per regular interview session.
+- The backend is the source of truth for billing and session-limit enforcement.
+- Never trust the frontend to activate paid plans.
+- Team billing should be driven by the Team model and team Stripe subscription state.
+
+---
+
+## Monorepo deployment summary
+
+### Vercel
+Deploy:
+- `interviewx-frontend`
+
+Needs:
+- `VITE_API_URL`
+
+### Railway
+Deploy:
+- `interviewx-backend`
+
+Needs:
+- all backend production env vars
+
+### MongoDB Atlas
+Provides:
+- production database via `MONGODB_URI`
+
+---
+
+## Current readiness summary
+
+InterviewX now has:
+- working auth
+- working regular interview room
+- working DSA room
+- working aptitude tracks
+- Stripe checkout foundation
+- Stripe webhook sync foundation
+- billing portal foundation
+- team foundations
+- backend session limits
+- backend rate limiting
+
+The main remaining work after deployment hardening is around:
+- deeper Team billing lifecycle polish
+- tests
+- account deletion flow
+- further UX refinement

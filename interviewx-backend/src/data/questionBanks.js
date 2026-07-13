@@ -1,6 +1,11 @@
 import { getDSAFallbackQuestions } from "./dsaFallbackQuestions.js";
 
 const DSA_TRACKS = ["dsa-fundamentals", "competitive"];
+const APTITUDE_TRACKS = [
+  "numerical-reasoning",
+  "logical-reasoning",
+  "verbal-ability",
+];
 
 export const TRACK_META = {
   // DSA
@@ -13,6 +18,22 @@ export const TRACK_META = {
     title: "Competitive Programming Interview",
     role: "Software Engineer",
     count: 4,
+  },
+  // Aptitude
+  "numerical-reasoning": {
+    title: "Numerical Reasoning Aptitude",
+    role: "Aptitude Candidate",
+    count: 5,
+  },
+  "logical-reasoning": {
+    title: "Logical Reasoning Aptitude",
+    role: "Aptitude Candidate",
+    count: 5,
+  },
+  "verbal-ability": {
+    title: "Verbal Ability Aptitude",
+    role: "Aptitude Candidate",
+    count: 5,
   },
   // Domain
   swe: {
@@ -96,6 +117,408 @@ export const TRACK_META = {
 // ─── Question pools ────────────────────────────────────────────────────────────
 // Each pool has MORE questions than the session needs.
 // pickQuestions() randomly selects `count` unique ones every session.
+//
+// Aptitude questions are curated structured objects so we can keep deterministic
+// evaluation without extra Groq calls.
+// Format:
+// {
+//   title: string,
+//   question: string,
+//   options: [{ id: "A" | "B" | "C" | "D", text: string }],
+//   correctAnswer: string, // option id
+//   explanation: string,
+//   difficulty: "Easy" | "Medium" | "Hard",
+//   category: string,
+//   topic: string,
+//   answerType: "multiple_choice"
+// }
+
+const APTITUDE_POOLS = {
+  "numerical-reasoning": [
+    {
+      title: "Percentage Increase",
+      question:
+        "A laptop price increases from ₹800 to ₹920. What is the percentage increase?",
+      options: [
+        { id: "A", text: "12%" },
+        { id: "B", text: "15%" },
+        { id: "C", text: "18%" },
+        { id: "D", text: "20%" },
+      ],
+      correctAnswer: "B",
+      explanation:
+        "The increase is ₹120. Percentage increase = 120 / 800 × 100 = 15%.",
+      difficulty: "Easy",
+      category: "Numerical Reasoning",
+      topic: "Percentages",
+      answerType: "multiple_choice",
+    },
+    {
+      title: "Profit and Loss",
+      question:
+        "An item is bought for ₹480 and sold for ₹564. What is the profit percentage?",
+      options: [
+        { id: "A", text: "15%" },
+        { id: "B", text: "17.5%" },
+        { id: "C", text: "20%" },
+        { id: "D", text: "22.5%" },
+      ],
+      correctAnswer: "B",
+      explanation:
+        "Profit = 564 - 480 = ₹84. Profit % = 84 / 480 × 100 = 17.5%.",
+      difficulty: "Easy",
+      category: "Numerical Reasoning",
+      topic: "Profit and Loss",
+      answerType: "multiple_choice",
+    },
+    {
+      title: "Ratio Simplification",
+      question:
+        "If the ratio of boys to girls in a class is 7:5 and there are 42 boys, how many girls are there?",
+      options: [
+        { id: "A", text: "28" },
+        { id: "B", text: "30" },
+        { id: "C", text: "32" },
+        { id: "D", text: "35" },
+      ],
+      correctAnswer: "B",
+      explanation:
+        "7 parts = 42, so 1 part = 6. Girls = 5 × 6 = 30.",
+      difficulty: "Easy",
+      category: "Numerical Reasoning",
+      topic: "Ratio and Proportion",
+      answerType: "multiple_choice",
+    },
+    {
+      title: "Simple Interest",
+      question:
+        "What is the simple interest on ₹2,500 at 8% per annum for 3 years?",
+      options: [
+        { id: "A", text: "₹500" },
+        { id: "B", text: "₹550" },
+        { id: "C", text: "₹600" },
+        { id: "D", text: "₹650" },
+      ],
+      correctAnswer: "C",
+      explanation:
+        "Simple interest = P × R × T / 100 = 2500 × 8 × 3 / 100 = ₹600.",
+      difficulty: "Easy",
+      category: "Numerical Reasoning",
+      topic: "Simple Interest",
+      answerType: "multiple_choice",
+    },
+    {
+      title: "Average Marks",
+      question:
+        "The average of five test scores is 74. If four scores are 68, 72, 75, and 80, what is the fifth score?",
+      options: [
+        { id: "A", text: "73" },
+        { id: "B", text: "74" },
+        { id: "C", text: "75" },
+        { id: "D", text: "76" },
+      ],
+      correctAnswer: "C",
+      explanation:
+        "Total of five scores = 74 × 5 = 370. Known total = 295. Fifth score = 370 - 295 = 75.",
+      difficulty: "Easy",
+      category: "Numerical Reasoning",
+      topic: "Averages",
+      answerType: "multiple_choice",
+    },
+    {
+      title: "Speed, Time, Distance",
+      question:
+        "A car travels 180 km in 3 hours. At the same speed, how far will it travel in 5 hours?",
+      options: [
+        { id: "A", text: "250 km" },
+        { id: "B", text: "280 km" },
+        { id: "C", text: "300 km" },
+        { id: "D", text: "320 km" },
+      ],
+      correctAnswer: "C",
+      explanation:
+        "Speed = 180 / 3 = 60 km/h. Distance in 5 hours = 60 × 5 = 300 km.",
+      difficulty: "Easy",
+      category: "Numerical Reasoning",
+      topic: "Speed, Time and Distance",
+      answerType: "multiple_choice",
+    },
+    {
+      title: "Work and Time",
+      question:
+        "If 6 workers can finish a task in 10 days, how many days will 12 workers take, assuming equal efficiency?",
+      options: [
+        { id: "A", text: "4 days" },
+        { id: "B", text: "5 days" },
+        { id: "C", text: "6 days" },
+        { id: "D", text: "8 days" },
+      ],
+      correctAnswer: "B",
+      explanation:
+        "Work = workers × days = 6 × 10 = 60 worker-days. With 12 workers, days = 60 / 12 = 5.",
+      difficulty: "Medium",
+      category: "Numerical Reasoning",
+      topic: "Time and Work",
+      answerType: "multiple_choice",
+    },
+  ],
+  "logical-reasoning": [
+    {
+      title: "Seating Order",
+      question:
+        "Five friends sit in a row. A is left of B, C is right of B, D is left of A, and E is right of C. Who sits in the middle?",
+      options: [
+        { id: "A", text: "A" },
+        { id: "B", text: "B" },
+        { id: "C", text: "C" },
+        { id: "D", text: "D" },
+      ],
+      correctAnswer: "B",
+      explanation:
+        "The order is D, A, B, C, E, so the middle seat is occupied by B.",
+      difficulty: "Medium",
+      category: "Logical Reasoning",
+      topic: "Arrangement",
+      answerType: "multiple_choice",
+    },
+    {
+      title: "Odd One Out",
+      question:
+        "Choose the odd one out: Triangle, Square, Circle, Cube",
+      options: [
+        { id: "A", text: "Triangle" },
+        { id: "B", text: "Square" },
+        { id: "C", text: "Circle" },
+        { id: "D", text: "Cube" },
+      ],
+      correctAnswer: "D",
+      explanation:
+        "Triangle, square, and circle are 2D shapes, while cube is a 3D solid.",
+      difficulty: "Easy",
+      category: "Logical Reasoning",
+      topic: "Classification",
+      answerType: "multiple_choice",
+    },
+    {
+      title: "Series Completion",
+      question:
+        "What comes next in the series: 2, 6, 12, 20, 30, ?",
+      options: [
+        { id: "A", text: "36" },
+        { id: "B", text: "40" },
+        { id: "C", text: "42" },
+        { id: "D", text: "44" },
+      ],
+      correctAnswer: "C",
+      explanation:
+        "The pattern adds consecutive even numbers: +4, +6, +8, +10, so next is +12. 30 + 12 = 42.",
+      difficulty: "Easy",
+      category: "Logical Reasoning",
+      topic: "Number Series",
+      answerType: "multiple_choice",
+    },
+    {
+      title: "Analogy",
+      question:
+        "Book is to Reading as Fork is to what?",
+      options: [
+        { id: "A", text: "Drawing" },
+        { id: "B", text: "Writing" },
+        { id: "C", text: "Eating" },
+        { id: "D", text: "Cooking" },
+      ],
+      correctAnswer: "C",
+      explanation:
+        "A book is used for reading; similarly, a fork is used for eating.",
+      difficulty: "Easy",
+      category: "Logical Reasoning",
+      topic: "Analogy",
+      answerType: "multiple_choice",
+    },
+    {
+      title: "Syllogism",
+      question:
+        "Statements: All coders are logical. Some logical people are designers. Conclusion: Some coders are designers. Choose the best answer.",
+      options: [
+        { id: "A", text: "Conclusion definitely follows" },
+        { id: "B", text: "Conclusion does not follow" },
+        { id: "C", text: "Conclusion follows only if all designers are coders" },
+        { id: "D", text: "Both A and C" },
+      ],
+      correctAnswer: "B",
+      explanation:
+        "The statements do not establish any overlap between coders and designers, so the conclusion does not follow.",
+      difficulty: "Medium",
+      category: "Logical Reasoning",
+      topic: "Syllogism",
+      answerType: "multiple_choice",
+    },
+    {
+      title: "Clock Angle",
+      question:
+        "At 3:30, what is the angle between the hour hand and the minute hand?",
+      options: [
+        { id: "A", text: "75°" },
+        { id: "B", text: "80°" },
+        { id: "C", text: "85°" },
+        { id: "D", text: "90°" },
+      ],
+      correctAnswer: "A",
+      explanation:
+        "Minute hand at 30 minutes = 180°. Hour hand at 3:30 = 3.5 × 30 = 105°. Difference = 75°.",
+      difficulty: "Medium",
+      category: "Logical Reasoning",
+      topic: "Clock Reasoning",
+      answerType: "multiple_choice",
+    },
+    {
+      title: "Direction Sense",
+      question:
+        "A person walks 5 km north, then 3 km east, then 5 km south. In which direction is the person from the starting point?",
+      options: [
+        { id: "A", text: "North" },
+        { id: "B", text: "South" },
+        { id: "C", text: "East" },
+        { id: "D", text: "West" },
+      ],
+      correctAnswer: "C",
+      explanation:
+        "The north and south movements cancel each other, leaving the person 3 km east of the starting point.",
+      difficulty: "Easy",
+      category: "Logical Reasoning",
+      topic: "Direction Sense",
+      answerType: "multiple_choice",
+    },
+  ],
+  "verbal-ability": [
+    {
+      title: "Sentence Completion",
+      question:
+        "Choose the word that best completes the sentence: The manager asked the team to remain ____ during the unexpected outage.",
+      options: [
+        { id: "A", text: "composed" },
+        { id: "B", text: "confused" },
+        { id: "C", text: "careless" },
+        { id: "D", text: "fragile" },
+      ],
+      correctAnswer: "A",
+      explanation:
+        "'Composed' means calm and self-controlled, which best fits the sentence context.",
+      difficulty: "Easy",
+      category: "Verbal Ability",
+      topic: "Sentence Completion",
+      answerType: "multiple_choice",
+    },
+    {
+      title: "Synonym",
+      question:
+        "Choose the word closest in meaning to 'concise'.",
+      options: [
+        { id: "A", text: "lengthy" },
+        { id: "B", text: "brief" },
+        { id: "C", text: "unclear" },
+        { id: "D", text: "detailed" },
+      ],
+      correctAnswer: "B",
+      explanation:
+        "'Concise' means brief and expressed in few words.",
+      difficulty: "Easy",
+      category: "Verbal Ability",
+      topic: "Synonyms",
+      answerType: "multiple_choice",
+    },
+    {
+      title: "Antonym",
+      question:
+        "Choose the word opposite in meaning to 'expand'.",
+      options: [
+        { id: "A", text: "stretch" },
+        { id: "B", text: "increase" },
+        { id: "C", text: "contract" },
+        { id: "D", text: "develop" },
+      ],
+      correctAnswer: "C",
+      explanation:
+        "The opposite of 'expand' is 'contract', meaning to become smaller or narrower.",
+      difficulty: "Easy",
+      category: "Verbal Ability",
+      topic: "Antonyms",
+      answerType: "multiple_choice",
+    },
+    {
+      title: "Reading Inference",
+      question:
+        "Read the statement: 'Remote work can improve focus for some employees, but it may reduce spontaneous collaboration.' What is the best inference?",
+      options: [
+        { id: "A", text: "Remote work is always better than office work" },
+        { id: "B", text: "Remote work has both benefits and trade-offs" },
+        { id: "C", text: "Collaboration is impossible during remote work" },
+        { id: "D", text: "Employees should never work remotely" },
+      ],
+      correctAnswer: "B",
+      explanation:
+        "The statement presents both a positive effect and a downside, so the best inference is that remote work involves trade-offs.",
+      difficulty: "Medium",
+      category: "Verbal Ability",
+      topic: "Reading Comprehension",
+      answerType: "multiple_choice",
+    },
+    {
+      title: "Error Spotting",
+      question:
+        "Choose the sentence with correct grammar.",
+      options: [
+        { id: "A", text: "Each of the players have a locker." },
+        { id: "B", text: "Neither the manager nor the engineers was late." },
+        { id: "C", text: "The data are being reviewed by the analyst." },
+        { id: "D", text: "She do not agree with the proposal." },
+      ],
+      correctAnswer: "C",
+      explanation:
+        "'The data are being reviewed by the analyst' is grammatically correct. The other options contain subject-verb agreement errors.",
+      difficulty: "Medium",
+      category: "Verbal Ability",
+      topic: "Grammar",
+      answerType: "multiple_choice",
+    },
+    {
+      title: "Para Jumble Logic",
+      question:
+        "Which opening sentence best introduces a paragraph about why good documentation improves software teams?",
+      options: [
+        { id: "A", text: "Documentation is often ignored until a problem appears." },
+        { id: "B", text: "Many software teams move fast, but clear documentation keeps knowledge accessible and reduces repeated mistakes." },
+        { id: "C", text: "Mistakes are common in every engineering team." },
+        { id: "D", text: "Projects usually involve deadlines and meetings." },
+      ],
+      correctAnswer: "B",
+      explanation:
+        "Option B introduces the main idea directly and sets up a paragraph about the value of documentation.",
+      difficulty: "Medium",
+      category: "Verbal Ability",
+      topic: "Para Jumbles",
+      answerType: "multiple_choice",
+    },
+    {
+      title: "Contextual Vocabulary",
+      question:
+        "Choose the word that best fits: The CTO's explanation was so ____ that even non-technical stakeholders understood the migration plan.",
+      options: [
+        { id: "A", text: "obscure" },
+        { id: "B", text: "lucid" },
+        { id: "C", text: "lengthy" },
+        { id: "D", text: "hostile" },
+      ],
+      correctAnswer: "B",
+      explanation:
+        "'Lucid' means clear and easy to understand, which matches the sentence context.",
+      difficulty: "Easy",
+      category: "Verbal Ability",
+      topic: "Vocabulary",
+      answerType: "multiple_choice",
+    },
+  ],
+};
 
 const POOLS = {
   swe: [
@@ -330,6 +753,16 @@ export function getFallbackQuestions(trackId) {
   if (DSA_TRACKS.includes(trackId)) {
     const meta = TRACK_META[trackId] ?? TRACK_META[DEFAULT_TRACK];
     return getDSAFallbackQuestions(trackId, meta.count);
+  }
+
+  if (APTITUDE_TRACKS.includes(trackId)) {
+    const pool =
+      APTITUDE_POOLS[trackId] ?? APTITUDE_POOLS["numerical-reasoning"];
+    const shuffled = [...pool].sort(() => Math.random() - 0.5);
+    const meta = TRACK_META[trackId] ?? TRACK_META[DEFAULT_TRACK];
+    const result = [];
+    while (result.length < meta.count) result.push(...shuffled);
+    return result.slice(0, meta.count);
   }
 
   const pool = POOLS[trackId] ?? POOLS[DEFAULT_TRACK];

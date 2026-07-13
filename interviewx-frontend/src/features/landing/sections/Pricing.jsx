@@ -1,7 +1,17 @@
+import { useEffect, useMemo, useState } from "react";
 import { motion } from "framer-motion";
-import { NavLink } from "react-router-dom";
-import { Check, Sparkles, Zap, Building2 } from "lucide-react";
+import { NavLink, useLocation, useNavigate } from "react-router-dom";
+import {
+  Check,
+  Sparkles,
+  Zap,
+  Building2,
+  CheckCircle2,
+  AlertCircle,
+} from "lucide-react";
 import { RoutePaths } from "@/app/routes/paths";
+import { useAuth } from "@/app/providers/useAuth.js";
+import { api, ApiError, getToken } from "@/shared/lib/api.js";
 
 const fadeUp = {
   hidden: { opacity: 0, y: 24 },
@@ -15,6 +25,100 @@ const stagger = {
   hidden: {},
   show: { transition: { staggerChildren: 0.1, delayChildren: 0.05 } },
 };
+
+const ENTITLED_SUBSCRIPTION_STATUSES = new Set([
+  "active",
+  "trialing",
+  "past_due",
+]);
+
+const PLAN_META = {
+  free: {
+    label: "Free",
+    accent: "var(--color-text-muted)",
+    background: "var(--color-surface-3)",
+    border: "var(--color-border)",
+    cta: "Current Plan",
+    dailyLimit: 2,
+  },
+  pro: {
+    label: "Pro",
+    accent: "var(--color-accent)",
+    background: "var(--color-accent-bg)",
+    border: "var(--color-accent-border)",
+    cta: "Current Plan",
+    dailyLimit: 5,
+  },
+  team: {
+    label: "Team",
+    accent: "#0ea5e9",
+    background: "rgba(14,165,233,0.12)",
+    border: "rgba(14,165,233,0.25)",
+    cta: "Managed Separately",
+    dailyLimit: 3,
+  },
+};
+
+function getEffectivePlan(user) {
+  if (!user) return "free";
+  if (user.plan === "team") return "team";
+
+  return user.plan === "pro" &&
+    ENTITLED_SUBSCRIPTION_STATUSES.has(user.subscriptionStatus)
+    ? "pro"
+    : "free";
+}
+
+function formatSubscriptionStatus(status) {
+  const value = String(status ?? "not_started").replace(/_/g, " ").trim();
+  return value.charAt(0).toUpperCase() + value.slice(1);
+}
+
+function getBillingSummary(user) {
+  const plan = getEffectivePlan(user);
+  const meta = PLAN_META[plan] ?? PLAN_META.free;
+
+  return {
+    plan,
+    planLabel: meta.label,
+    accent: meta.accent,
+    background: meta.background,
+    border: meta.border,
+    cta: meta.cta,
+    dailyLimit: meta.dailyLimit,
+    subscriptionStatus:
+      plan === "free" && user?.plan !== "team"
+        ? "Free access"
+        : formatSubscriptionStatus(user?.subscriptionStatus),
+  };
+}
+
+function getUtcDayRange(date = new Date()) {
+  const start = new Date(
+    Date.UTC(date.getUTCFullYear(), date.getUTCMonth(), date.getUTCDate()),
+  );
+  const end = new Date(start);
+  end.setUTCDate(end.getUTCDate() + 1);
+  return { start, end };
+}
+
+function computeUsageSummary(sessions, billing) {
+  if (!billing) return null;
+
+  const { start, end } = getUtcDayRange();
+  const usedToday = sessions.filter((session) => {
+    const timestamp = session.startedAt ?? session.createdAt;
+    if (!timestamp) return false;
+    const when = new Date(timestamp);
+    return when >= start && when < end;
+  }).length;
+
+  return {
+    usedToday,
+    remainingToday: Math.max(0, billing.dailyLimit - usedToday),
+    dailyLimit: billing.dailyLimit,
+  };
+}
 
 const PLANS = [
   {
@@ -45,8 +149,7 @@ const PLANS = [
     price: "₹499",
     period: "per month",
     tagline: "For serious candidates targeting top companies.",
-    cta: "Start Pro Free Trial",
-    ctaTo: RoutePaths.register,
+    cta: "Start Pro",
     highlighted: true,
     badge: "Most Popular",
     features: [
@@ -72,10 +175,9 @@ const PLANS = [
     price: "₹299",
     period: "per seat / month",
     tagline: "For bootcamps, colleges, and hiring teams.",
-    cta: "Contact Us",
-    ctaTo: "mailto:hello@interviewx.app",
-    isExternal: true,
+    cta: "Coming Soon",
     highlighted: false,
+    disabled: true,
     features: [
       "3 interview sessions per member per day",
       "Everything in Pro",
@@ -90,8 +192,153 @@ const PLANS = [
   },
 ];
 
-function PlanCard({ plan }) {
+function getPlanCardMessage(planId, billing, usage, usageLoading) {
+  if (!billing) return null;
+
+  if (planId === "free") {
+    if (billing.plan === "free") {
+      if (usageLoading) {
+        return {
+          tone: "neutral",
+          title: "Checking today's free usage",
+          message: "Loading how many free sessions you still have available today.",
+        };
+      }
+
+      if ((usage?.remainingToday ?? 0) > 0) {
+        return {
+          tone: "neutral",
+          title: `${usage.remainingToday} free session${usage.remainingToday === 1 ? "" : "s"} left today`,
+          message: `You've used ${usage.usedToday}/${PLAN_META.free.dailyLimit} free sessions so far today (UTC reset).`,
+        };
+      }
+
+      return {
+        tone: "warning",
+        title: "Today's free limit reached",
+        message:
+          "You've used both free sessions today. Upgrading to Pro would raise today's allowance to 5 sessions.",
+      };
+    }
+
+    if (billing.plan === "pro") {
+      return {
+        tone: "warning",
+        title: "Lower allowance than your current plan",
+        message:
+          "You're already on Pro. Moving back to Free would reduce your daily interview allowance from 5 to 2.",
+      };
+    }
+
+    return {
+      tone: "neutral",
+      title: "Managed separately",
+      message:
+        "Your account is associated with Team billing. Free-plan limits are shown only for comparison.",
+    };
+  }
+
+  if (planId === "pro") {
+    if (billing.plan === "pro") {
+      if (usageLoading) {
+        return {
+          tone: "success",
+          title: "Pro plan active",
+          message: "Refreshing today's remaining Pro allowance now.",
+        };
+      }
+
+      return {
+        tone: "success",
+        title: `${usage?.remainingToday ?? PLAN_META.pro.dailyLimit} Pro session${(usage?.remainingToday ?? PLAN_META.pro.dailyLimit) === 1 ? "" : "s"} left today`,
+        message: `You've used ${usage?.usedToday ?? 0}/${PLAN_META.pro.dailyLimit} Pro sessions today before the UTC reset.`,
+      };
+    }
+
+    if (billing.plan === "free") {
+      if (usageLoading) {
+        return {
+          tone: "neutral",
+          title: "More room to practise",
+          message:
+            "Pro raises your daily allowance from 2 sessions to 5 sessions per UTC day.",
+        };
+      }
+
+      const extraToday = Math.max(0, PLAN_META.pro.dailyLimit - (usage?.usedToday ?? 0));
+      const reachedFreeLimit = (usage?.remainingToday ?? 0) === 0;
+
+      return reachedFreeLimit
+        ? {
+            tone: "warning",
+            title: `Unlock up to ${extraToday} more session${extraToday === 1 ? "" : "s"} today`,
+            message:
+              "You've hit today's free limit. Upgrading to Pro increases your daily cap to 5 immediately.",
+          }
+        : {
+            tone: "success",
+            title: `Upgrade for ${extraToday} total sessions remaining today`,
+            message:
+              "You're still on Free, but Pro would increase today's limit to 5 and give you more room to practise.",
+          };
+    }
+
+    return {
+      tone: "neutral",
+      title: "Team billing comes later",
+      message:
+        "Team checkout remains disabled until team/member management is implemented.",
+    };
+  }
+
+  if (billing.plan === "team") {
+    return {
+      tone: "neutral",
+      title: "Team-managed billing",
+      message:
+        "Your Team subscription will be managed separately once team/member support is fully released.",
+    };
+  }
+
+  return {
+    tone: "neutral",
+    title: "Coming later",
+    message:
+      "Team billing will be enabled in a later phase alongside full team/member management.",
+  };
+}
+
+function PlanCard({ plan, onSelect, isLoading, billing, usage, usageLoading }) {
   const Icon = plan.icon;
+  const isCurrentPlan = billing?.plan === plan.id;
+  const contextMessage = getPlanCardMessage(
+    plan.id,
+    billing,
+    usage,
+    usageLoading,
+  );
+
+  const primaryButtonStyle = plan.highlighted
+    ? {
+        background:
+          "linear-gradient(135deg, var(--color-accent) 0%, #9333ea 100%)",
+        color: "#fff",
+        boxShadow: "0 4px 20px rgba(124,58,237,0.35)",
+      }
+    : {
+        background: "var(--color-surface-2)",
+        border: "1px solid var(--color-border)",
+        color: "var(--color-text-invert)",
+      };
+
+  const disabledButtonStyle = {
+    background: "var(--color-surface-2)",
+    border: "1px solid var(--color-border)",
+    color: "var(--color-text-muted)",
+    opacity: 0.65,
+    cursor: "not-allowed",
+    boxShadow: "none",
+  };
 
   return (
     <motion.div
@@ -113,7 +360,6 @@ function PlanCard({ plan }) {
           : "none",
       }}
     >
-      {/* Highlight glow */}
       {plan.highlighted && (
         <div
           className="pointer-events-none absolute inset-0 rounded-2xl"
@@ -124,7 +370,6 @@ function PlanCard({ plan }) {
         />
       )}
 
-      {/* Badge */}
       {plan.badge && (
         <span
           className="absolute -top-3 left-1/2 -translate-x-1/2 rounded-full border px-3 py-1 text-[11px] font-bold uppercase tracking-widest"
@@ -138,7 +383,6 @@ function PlanCard({ plan }) {
         </span>
       )}
 
-      {/* Header */}
       <div className="mb-6 space-y-3 relative z-10">
         <div className="flex items-center gap-2.5">
           <div
@@ -182,60 +426,82 @@ function PlanCard({ plan }) {
         </p>
       </div>
 
-      {/* CTA */}
-      <div className="mb-6 relative z-10">
-        {plan.isExternal ? (
-          <a
-            href={plan.ctaTo}
-            className="flex w-full items-center justify-center rounded-xl py-2.5 text-sm font-semibold transition-all"
-            style={
-              plan.highlighted
-                ? {
-                    background:
-                      "linear-gradient(135deg, var(--color-accent) 0%, #9333ea 100%)",
-                    color: "#fff",
-                    boxShadow: "0 4px 20px rgba(124,58,237,0.35)",
-                  }
-                : {
-                    background: "var(--color-surface-2)",
-                    border: "1px solid var(--color-border)",
-                    color: "var(--color-text-invert)",
-                  }
-            }
+      <div className="mb-4 relative z-10">
+        {isCurrentPlan ? (
+          <button
+            type="button"
+            disabled
+            className="flex w-full items-center justify-center rounded-xl py-2.5 text-sm font-semibold disabled:cursor-not-allowed"
+            style={disabledButtonStyle}
           >
-            {plan.cta}
-          </a>
-        ) : (
+            {billing.cta}
+          </button>
+        ) : plan.id === "free" ? (
           <NavLink
             to={plan.ctaTo}
             className="flex w-full items-center justify-center rounded-xl py-2.5 text-sm font-semibold transition-all"
-            style={
-              plan.highlighted
-                ? {
-                    background:
-                      "linear-gradient(135deg, var(--color-accent) 0%, #9333ea 100%)",
-                    color: "#fff",
-                    boxShadow: "0 4px 20px rgba(124,58,237,0.35)",
-                  }
-                : {
-                    background: "var(--color-surface-2)",
-                    border: "1px solid var(--color-border)",
-                    color: "var(--color-text-invert)",
-                  }
-            }
+            style={primaryButtonStyle}
           >
             {plan.cta}
           </NavLink>
+        ) : (
+          <button
+            type="button"
+            onClick={() => onSelect(plan.id)}
+            disabled={isLoading || plan.disabled}
+            className="flex w-full items-center justify-center rounded-xl py-2.5 text-sm font-semibold transition-all disabled:cursor-not-allowed"
+            style={plan.disabled ? disabledButtonStyle : primaryButtonStyle}
+          >
+            {isLoading ? "Redirecting…" : plan.cta}
+          </button>
         )}
       </div>
 
-      {/* Divider */}
+      {contextMessage && (
+        <div
+          className="mb-5 rounded-xl border px-3.5 py-3 relative z-10"
+          style={{
+            background:
+              contextMessage.tone === "success"
+                ? "var(--color-success-bg)"
+                : contextMessage.tone === "warning"
+                  ? "var(--color-warning-bg)"
+                  : "var(--color-surface-2)",
+            borderColor:
+              contextMessage.tone === "success"
+                ? "var(--color-success-border)"
+                : contextMessage.tone === "warning"
+                  ? "var(--color-warning-border)"
+                  : "var(--color-border)",
+          }}
+        >
+          <p
+            className="text-[11px] font-semibold uppercase tracking-wider"
+            style={{
+              color:
+                contextMessage.tone === "success"
+                  ? "var(--color-success)"
+                  : contextMessage.tone === "warning"
+                    ? "var(--color-warning)"
+                    : "var(--color-text-muted)",
+            }}
+          >
+            {contextMessage.title}
+          </p>
+          <p
+            className="mt-1 text-[12px] leading-relaxed"
+            style={{ color: "var(--color-text)" }}
+          >
+            {contextMessage.message}
+          </p>
+        </div>
+      )}
+
       <div
         className="mb-5 h-px relative z-10"
         style={{ background: "var(--color-border)" }}
       />
 
-      {/* Features */}
       <ul className="flex flex-col gap-3 relative z-10">
         {plan.features.map((f) => (
           <li key={f} className="flex items-start gap-2.5">
@@ -274,7 +540,266 @@ function PlanCard({ plan }) {
   );
 }
 
+function BillingStatusBanner({ billing, usage, usageLoading }) {
+  if (!billing) return null;
+
+  return (
+    <motion.div
+      initial={{ opacity: 0, y: 10 }}
+      animate={{ opacity: 1, y: 0 }}
+      className="mx-auto mb-6 max-w-[980px] rounded-2xl border p-5 sm:p-6"
+      style={{
+        background: billing.background,
+        borderColor: billing.border,
+      }}
+    >
+      <div className="flex flex-col gap-5 lg:flex-row lg:items-center lg:justify-between">
+        <div className="min-w-0 flex-1">
+          <p
+            className="text-[11px] font-bold uppercase tracking-wider"
+            style={{ color: billing.accent }}
+          >
+            Your current plan
+          </p>
+          <div className="mt-2 flex flex-wrap items-center gap-2">
+            <span
+              className="inline-flex items-center rounded-full border px-2.5 py-1 text-[11px] font-semibold"
+              style={{
+                background: "rgba(255,255,255,0.6)",
+                borderColor: billing.border,
+                color: billing.accent,
+              }}
+            >
+              {billing.planLabel}
+            </span>
+            <span
+              className="inline-flex items-center rounded-full border px-2.5 py-1 text-[11px] font-medium"
+              style={{
+                background: "var(--color-surface-1)",
+                borderColor: "var(--color-border)",
+                color: "var(--color-text-muted)",
+              }}
+            >
+              {billing.subscriptionStatus}
+            </span>
+          </div>
+          <p
+            className="mt-3 max-w-[580px] text-sm leading-relaxed"
+            style={{ color: "var(--color-text)" }}
+          >
+            {billing.plan === "pro"
+              ? "You already have access to Pro limits. Use today's remaining sessions before the UTC reset if you want to maximise practice."
+              : billing.plan === "team"
+                ? "Team billing will be managed separately once team/member support is released. Current usage is shown per member allowance."
+                : "You're currently on the Free plan. Your remaining sessions today are shown below so you can decide whether you need Pro right now."}
+          </p>
+        </div>
+
+        <div className="grid grid-cols-3 gap-3 lg:min-w-[340px]">
+          {[
+            {
+              label: "Daily limit",
+              value: usageLoading ? "—" : usage?.dailyLimit ?? billing.dailyLimit,
+            },
+            {
+              label: "Used today",
+              value: usageLoading ? "—" : usage?.usedToday ?? 0,
+            },
+            {
+              label: "Remaining",
+              value: usageLoading ? "—" : usage?.remainingToday ?? billing.dailyLimit,
+            },
+          ].map((item) => (
+            <div
+              key={item.label}
+              className="rounded-xl border px-3 py-3 text-center"
+              style={{
+                background: "var(--color-surface-1)",
+                borderColor: billing.border,
+              }}
+            >
+              <p
+                className="text-lg font-bold"
+                style={{ color: "var(--color-text-invert)" }}
+              >
+                {item.value}
+              </p>
+              <p
+                className="mt-0.5 text-[10px] font-medium uppercase tracking-wider"
+                style={{ color: "var(--color-text-muted)" }}
+              >
+                {item.label}
+              </p>
+            </div>
+          ))}
+        </div>
+      </div>
+    </motion.div>
+  );
+}
+
+function CheckoutBanner({ notice }) {
+  if (!notice) return null;
+
+  const Icon = notice.tone === "success" ? CheckCircle2 : AlertCircle;
+  const styles =
+    notice.tone === "success"
+      ? {
+          background: "var(--color-success-bg)",
+          borderColor: "var(--color-success-border)",
+          titleColor: "var(--color-success)",
+        }
+      : {
+          background: "var(--color-warning-bg)",
+          borderColor: "var(--color-warning-border)",
+          titleColor: "var(--color-warning)",
+        };
+
+  return (
+    <motion.div
+      initial={{ opacity: 0, y: 10 }}
+      animate={{ opacity: 1, y: 0 }}
+      className="mx-auto mb-6 max-w-[900px] rounded-2xl border p-4 sm:p-5"
+      style={{
+        background: styles.background,
+        borderColor: styles.borderColor,
+      }}
+    >
+      <div className="flex items-start gap-3">
+        <div
+          className="mt-0.5 flex h-9 w-9 shrink-0 items-center justify-center rounded-xl"
+          style={{ background: "rgba(255,255,255,0.65)" }}
+        >
+          <Icon size={18} strokeWidth={2.2} style={{ color: styles.titleColor }} />
+        </div>
+        <div>
+          <p
+            className="text-sm font-semibold"
+            style={{ color: "var(--color-text-invert)" }}
+          >
+            {notice.title}
+          </p>
+          <p className="mt-1 text-[13px]" style={{ color: "var(--color-text)" }}>
+            {notice.message}
+          </p>
+        </div>
+      </div>
+    </motion.div>
+  );
+}
+
 export default function Pricing() {
+  const navigate = useNavigate();
+  const location = useLocation();
+  const { user } = useAuth();
+  const billing = user ? getBillingSummary(user) : null;
+  const [loadingPlan, setLoadingPlan] = useState("");
+  const [error, setError] = useState("");
+  const [checkoutNotice, setCheckoutNotice] = useState(null);
+  const [sessions, setSessions] = useState([]);
+  const [usageLoading, setUsageLoading] = useState(Boolean(user));
+
+  useEffect(() => {
+    const params = new URLSearchParams(location.search);
+    const checkout = params.get("checkout");
+
+    if (checkout === "success") {
+      setCheckoutNotice({
+        tone: "success",
+        title: "Payment successful",
+        message:
+          "Your Stripe checkout completed successfully. If your Pro plan was purchased for a logged-in account, subscription sync may take a few seconds.",
+      });
+      navigate(location.pathname, { replace: true });
+      return;
+    }
+
+    if (checkout === "cancelled") {
+      setCheckoutNotice({
+        tone: "warning",
+        title: "Checkout cancelled",
+        message:
+          "Your Stripe checkout was cancelled, so no billing change was applied. You can start checkout again anytime.",
+      });
+      navigate(location.pathname, { replace: true });
+    }
+  }, [location.pathname, location.search, navigate]);
+
+  useEffect(() => {
+    if (!user) {
+      setSessions([]);
+      setUsageLoading(false);
+      return;
+    }
+
+    let cancelled = false;
+    setUsageLoading(true);
+
+    api
+      .get("/api/interviews")
+      .then(({ sessions }) => {
+        if (!cancelled) setSessions(sessions ?? []);
+      })
+      .catch(() => {
+        if (!cancelled) setSessions([]);
+      })
+      .finally(() => {
+        if (!cancelled) setUsageLoading(false);
+      });
+
+    return () => {
+      cancelled = true;
+    };
+  }, [user]);
+
+  const usage = useMemo(
+    () => computeUsageSummary(sessions, billing),
+    [sessions, billing],
+  );
+
+  async function handlePlanSelect(planId) {
+    if (planId === "team") {
+      setError(
+        "Team billing is coming soon and will be enabled after team/member support is added.",
+      );
+      return;
+    }
+
+    if (planId !== "pro") return;
+
+    setError("");
+
+    if (!getToken()) {
+      navigate(RoutePaths.login);
+      return;
+    }
+
+    setLoadingPlan(planId);
+    try {
+      const data = await api.post("/api/payments/create-checkout", {
+        plan: planId,
+      });
+
+      if (!data?.checkoutUrl) {
+        throw new ApiError("Stripe checkout URL was not returned.", 502);
+      }
+
+      window.location.assign(data.checkoutUrl);
+    } catch (err) {
+      if (err instanceof ApiError && err.status === 401) {
+        navigate(RoutePaths.login);
+        return;
+      }
+
+      setError(
+        err instanceof ApiError
+          ? err.message
+          : "Could not start Stripe checkout. Please try again.",
+      );
+      setLoadingPlan("");
+    }
+  }
+
   return (
     <section
       id="pricing"
@@ -290,7 +815,6 @@ export default function Pricing() {
       />
 
       <div className="mx-auto w-full max-w-[1200px] px-4 py-20 sm:px-6 lg:py-28">
-        {/* Header */}
         <motion.div
           initial={{ opacity: 0, y: 20 }}
           whileInView={{ opacity: 1, y: 0 }}
@@ -333,7 +857,15 @@ export default function Pricing() {
           </p>
         </motion.div>
 
-        {/* Plan cards */}
+        {billing && (
+          <BillingStatusBanner
+            billing={billing}
+            usage={usage}
+            usageLoading={usageLoading}
+          />
+        )}
+        <CheckoutBanner notice={checkoutNotice} />
+
         <motion.div
           variants={stagger}
           initial="hidden"
@@ -342,11 +874,29 @@ export default function Pricing() {
           className="grid grid-cols-1 gap-5 md:grid-cols-3"
         >
           {PLANS.map((plan) => (
-            <PlanCard key={plan.id} plan={plan} />
+            <PlanCard
+              key={plan.id}
+              plan={plan}
+              onSelect={handlePlanSelect}
+              isLoading={loadingPlan === plan.id}
+              billing={billing}
+              usage={usage}
+              usageLoading={usageLoading}
+            />
           ))}
         </motion.div>
 
-        {/* Bottom note */}
+        {error && (
+          <motion.p
+            initial={{ opacity: 0, y: 8 }}
+            animate={{ opacity: 1, y: 0 }}
+            className="mx-auto mt-5 max-w-[720px] text-center text-[13px]"
+            style={{ color: "var(--color-error)" }}
+          >
+            {error}
+          </motion.p>
+        )}
+
         <motion.p
           initial={{ opacity: 0 }}
           whileInView={{ opacity: 1 }}
@@ -355,8 +905,9 @@ export default function Pricing() {
           className="mt-10 text-center text-[13px]"
           style={{ color: "var(--color-text-muted)" }}
         >
-          All prices in INR. Pro plan includes a 7-day free trial — no card
-          required to start. Cancel anytime.
+          All prices in INR. Free users can upgrade to Pro securely through
+          Stripe. Team billing will be enabled in a later phase with team/member
+          support.
         </motion.p>
       </div>
 

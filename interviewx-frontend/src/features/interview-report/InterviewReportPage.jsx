@@ -42,25 +42,95 @@ function formatDate(iso) {
   });
 }
 
+function parseStructuredQuestion(q) {
+  if (typeof q === "object" && q !== null) return q;
+  if (typeof q !== "string") return null;
+
+  const trimmed = q.trim();
+  if (!trimmed.startsWith("{")) return null;
+
+  try {
+    return JSON.parse(trimmed);
+  } catch {
+    return null;
+  }
+}
+
 /**
- * DSA question objects are stored as JSON strings in MongoDB.
- * This safely extracts a clean display title whether the question is:
+ * Safely extracts a clean display title whether the question is:
  * - a plain string (regular tracks)
- * - a JSON string of {title, description, ...} (DSA tracks)
+ * - a JSON string of {title, description, ...} (DSA / aptitude tracks)
  */
 function getQuestionTitle(q) {
   if (typeof q !== "string") return String(q ?? "");
 
-  const trimmed = q.trim();
-  if (trimmed.startsWith("{")) {
-    try {
-      const parsed = JSON.parse(trimmed);
-      return parsed.title ?? parsed.description ?? trimmed;
-    } catch {
-      return trimmed;
-    }
+  const parsed = parseStructuredQuestion(q);
+  if (parsed) {
+    return parsed.title ?? parsed.description ?? parsed.question ?? q.trim();
   }
+
   return q;
+}
+
+function normalizeAnswer(value) {
+  return String(value ?? "")
+    .trim()
+    .toLowerCase()
+    .replace(/[^a-z0-9%]+/g, "");
+}
+
+function extractOptionId(answer) {
+  const raw = String(answer ?? "");
+  const match = raw.match(/\b([A-D])\b/i);
+  return match?.[1]?.toUpperCase() ?? null;
+}
+
+function getAptitudeReview(question, answer) {
+  const parsed = parseStructuredQuestion(question);
+  if (!parsed || !Array.isArray(parsed.options) || !parsed.correctAnswer) {
+    return null;
+  }
+
+  const rawAnswer = String(answer ?? "").trim();
+  const normalizedAnswer = normalizeAnswer(rawAnswer);
+  const selectedId = extractOptionId(rawAnswer);
+  const correctId = String(parsed.correctAnswer).toUpperCase();
+  const correctOption = parsed.options.find(
+    (opt) => String(opt.id).toUpperCase() === correctId,
+  );
+
+  const matchedOption =
+    parsed.options.find((opt) => {
+      const optionText = normalizeAnswer(opt.text);
+      return (
+        selectedId === String(opt.id).toUpperCase() ||
+        normalizedAnswer === optionText ||
+        normalizedAnswer === normalizeAnswer(`option ${opt.id}`) ||
+        (optionText.length >= 4 && normalizedAnswer.includes(optionText))
+      );
+    }) ?? null;
+
+  const skipped =
+    !normalizedAnswer || /skip this question|^skip$|noanswer/i.test(rawAnswer);
+  const selectedAnswer = skipped
+    ? "Skipped"
+    : matchedOption
+      ? `${matchedOption.id}. ${matchedOption.text}`
+      : rawAnswer || "—";
+  const correctAnswer = correctOption
+    ? `${correctOption.id}. ${correctOption.text}`
+    : correctId;
+  const isCorrect = !skipped && matchedOption
+    ? String(matchedOption.id).toUpperCase() === correctId
+    : false;
+
+  return {
+    selectedAnswer,
+    correctAnswer,
+    explanation: parsed.explanation ?? "",
+    isCorrect,
+    skipped,
+  };
 }
 
 function ScoreBar({ label, value }) {
@@ -100,7 +170,75 @@ function ScoreBar({ label, value }) {
   );
 }
 
-function QuestionRow({ q, score, feedback, index }) {
+function AptitudeAnswerReview({ review }) {
+  if (!review) return null;
+
+  return (
+    <div
+      className="ml-9 space-y-3 rounded-xl border p-4"
+      style={{
+        background: "var(--color-surface-2)",
+        borderColor: "var(--color-border)",
+      }}
+    >
+      <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
+        <div>
+          <p
+            className="text-[10px] font-bold uppercase tracking-wider"
+            style={{ color: "var(--color-text-muted)" }}
+          >
+            Selected Answer
+          </p>
+          <p
+            className="mt-1 text-[13px] font-medium leading-relaxed"
+            style={{
+              color: review.skipped
+                ? "var(--color-warning)"
+                : review.isCorrect
+                  ? "var(--color-success)"
+                  : "var(--color-text-invert)",
+            }}
+          >
+            {review.selectedAnswer}
+          </p>
+        </div>
+        <div>
+          <p
+            className="text-[10px] font-bold uppercase tracking-wider"
+            style={{ color: "var(--color-text-muted)" }}
+          >
+            Correct Answer
+          </p>
+          <p
+            className="mt-1 text-[13px] font-medium leading-relaxed"
+            style={{ color: "var(--color-success)" }}
+          >
+            {review.correctAnswer}
+          </p>
+        </div>
+      </div>
+
+      {review.explanation && (
+        <div>
+          <p
+            className="text-[10px] font-bold uppercase tracking-wider"
+            style={{ color: "var(--color-text-muted)" }}
+          >
+            Explanation
+          </p>
+          <p
+            className="mt-1 text-[13px] leading-relaxed"
+            style={{ color: "var(--color-text-muted)" }}
+          >
+            {review.explanation}
+          </p>
+        </div>
+      )}
+    </div>
+  );
+}
+
+function QuestionRow({ q, answerText, score, feedback, index }) {
   const color =
     score >= 88
       ? "var(--color-success)"
@@ -109,6 +247,7 @@ function QuestionRow({ q, score, feedback, index }) {
         : "var(--color-warning)";
 
   const title = getQuestionTitle(q);
+  const aptitudeReview = getAptitudeReview(q, answerText);
 
   return (
     <motion.div
@@ -150,6 +289,7 @@ function QuestionRow({ q, score, feedback, index }) {
       >
         {feedback}
       </p>
+      <AptitudeAnswerReview review={aptitudeReview} />
     </motion.div>
   );
 }
@@ -571,6 +711,7 @@ export default function InterviewReportPage() {
                   key={i}
                   index={i}
                   q={item.question}
+                  answerText={item.answer}
                   score={item.score}
                   feedback={item.feedback}
                 />
