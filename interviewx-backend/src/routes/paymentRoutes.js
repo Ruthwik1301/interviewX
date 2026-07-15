@@ -1,5 +1,6 @@
 import crypto from "crypto";
 import express, { Router } from "express";
+import Razorpay from "razorpay";
 import { requireAuth } from "../middleware/auth.js";
 import { Team } from "../models/Team.js";
 import { User } from "../models/User.js";
@@ -12,27 +13,28 @@ import {
 } from "../config/billing.js";
 
 const router = Router();
-const STRIPE_API_BASE = "https://api.stripe.com/v1";
-const STRIPE_WEBHOOK_TOLERANCE_SECONDS = 300;
+
+// A subscription is billed indefinitely until cancelled. Razorpay requires a
+// finite total_count of billing cycles up front, so we use a large number
+// (10 years of monthly cycles) to approximate "until cancelled".
+const RAZORPAY_TOTAL_BILLING_CYCLES = 120;
+
 const ENTITLED_STATUSES = new Set([
   SUBSCRIPTION_STATUS.ACTIVE,
-  SUBSCRIPTION_STATUS.TRIALING,
   SUBSCRIPTION_STATUS.PAST_DUE,
 ]);
 
-function buildCheckoutUrls() {
-  return {
-    successUrl:
-      env.stripeCheckoutSuccessUrl ??
-      `${env.appUrl}/app?checkout=success&session_id={CHECKOUT_SESSION_ID}`,
-    cancelUrl:
-      env.stripeCheckoutCancelUrl ?? `${env.appUrl}/app?checkout=cancelled`,
-  };
+function getRazorpayClient() {
+  if (!env.razorpayKeyId || !env.razorpayKeySecret) return null;
+  return new Razorpay({
+    key_id: env.razorpayKeyId,
+    key_secret: env.razorpayKeySecret,
+  });
 }
 
-function getPriceIdForPlan(plan) {
-  if (plan === PLAN_KEYS.PRO) return env.stripePriceIdPro;
-  if (plan === PLAN_KEYS.TEAM) return env.stripePriceIdTeam;
+function getPlanIdForPlan(plan) {
+  if (plan === PLAN_KEYS.PRO) return env.razorpayPlanIdPro;
+  if (plan === PLAN_KEYS.TEAM) return env.razorpayPlanIdTeam;
   return null;
 }
 
@@ -58,249 +60,106 @@ function getMinimumTeamSeatQuantity(team) {
   return Math.max(5, countActiveMembers(team) + countPendingInvites(team));
 }
 
-async function stripeRequest(path, { method = "POST", params = null } = {}) {
-  const url = `${STRIPE_API_BASE}${path}`;
-  const headers = {
-    Authorization: `Bearer ${env.stripeSecretKey}`,
-  };
-
-  const options = { method, headers };
-
-  if (params && method !== "GET") {
-    headers["Content-Type"] = "application/x-www-form-urlencoded";
-    options.body = params.toString();
+async function ensureRazorpayCustomer(razorpay, user) {
+  if (user.razorpayCustomerId) {
+    return user.razorpayCustomerId;
   }
 
-  const response = await fetch(url, options);
-  const raw = await response.text();
-  let data = null;
+  // fail_existing: "0" makes this idempotent - if a customer with this email
+  // already exists on the Razorpay account, it returns that customer instead
+  // of throwing.
+  const customer = await razorpay.customers.create({
+    name: user.name,
+    email: user.email,
+    fail_existing: 0,
+  });
 
-  try {
-    data = JSON.parse(raw);
-  } catch {
-    data = null;
-  }
-
-  if (!response.ok) {
-    const message =
-      data?.error?.message ||
-      `Stripe request failed with status ${response.status}.`;
-    const err = new Error(message);
-    err.statusCode = response.status;
-    err.stripe = data;
-    throw err;
-  }
-
-  return data;
-}
-
-async function ensureStripeCustomer(user) {
-  if (user.stripeCustomerId) {
-    return user.stripeCustomerId;
-  }
-
-  const params = new URLSearchParams();
-  params.set("email", user.email);
-  params.set("name", user.name);
-  params.set("metadata[userId]", user._id.toString());
-
-  const customer = await stripeRequest("/customers", { params });
-  user.stripeCustomerId = customer.id;
+  user.razorpayCustomerId = customer.id;
   await user.save();
   return customer.id;
 }
 
-async function ensureTeamStripeCustomer(team, ownerUser) {
-  if (team.stripeCustomerId) {
-    return team.stripeCustomerId;
+async function ensureTeamRazorpayCustomer(razorpay, team, ownerUser) {
+  if (team.razorpayCustomerId) {
+    return team.razorpayCustomerId;
   }
 
-  const params = new URLSearchParams();
-  params.set("email", ownerUser.email);
-  params.set("name", team.name);
-  params.set("metadata[teamId]", team._id.toString());
-  params.set("metadata[ownerUserId]", ownerUser._id.toString());
+  const customer = await razorpay.customers.create({
+    name: team.name,
+    email: ownerUser.email,
+    fail_existing: 0,
+  });
 
-  const customer = await stripeRequest("/customers", { params });
-  team.stripeCustomerId = customer.id;
+  team.razorpayCustomerId = customer.id;
   await team.save();
   return customer.id;
 }
 
-async function fetchStripeSubscription(subscriptionId) {
-  if (!subscriptionId || !env.stripeSecretKey) return null;
-  return stripeRequest(`/subscriptions/${subscriptionId}`, { method: "GET" });
-}
-
-function parseStripeSignatureHeader(headerValue) {
-  const parts = String(headerValue ?? "")
-    .split(",")
-    .map((part) => part.trim())
-    .filter(Boolean);
-
-  const parsed = { timestamp: null, signatures: [] };
-
-  for (const part of parts) {
-    const [key, value] = part.split("=");
-    if (!key || !value) continue;
-    if (key === "t") parsed.timestamp = value;
-    if (key === "v1") parsed.signatures.push(value);
-  }
-
-  return parsed;
-}
-
-function timingSafeHexEqual(a, b) {
-  try {
-    const left = Buffer.from(a, "hex");
-    const right = Buffer.from(b, "hex");
-    if (left.length === 0 || left.length !== right.length) return false;
-    return crypto.timingSafeEqual(left, right);
-  } catch {
-    return false;
-  }
-}
-
-function isValidStripeWebhookSignature(rawBody, signatureHeader, secret) {
-  const { timestamp, signatures } = parseStripeSignatureHeader(signatureHeader);
-  if (!timestamp || signatures.length === 0) return false;
-
-  const timestampSeconds = Number(timestamp);
-  if (!Number.isFinite(timestampSeconds)) return false;
-
-  const ageSeconds = Math.abs(Math.floor(Date.now() / 1000) - timestampSeconds);
-  if (ageSeconds > STRIPE_WEBHOOK_TOLERANCE_SECONDS) return false;
-
-  const signedPayload = `${timestamp}.${rawBody.toString("utf8")}`;
-  const expected = crypto
-    .createHmac("sha256", secret)
-    .update(signedPayload, "utf8")
-    .digest("hex");
-
-  return signatures.some((signature) => timingSafeHexEqual(signature, expected));
-}
-
-function normalizeStripeSubscriptionStatus(status) {
+function normalizeRazorpaySubscriptionStatus(status) {
   switch (status) {
-    case "incomplete":
+    case "created":
       return SUBSCRIPTION_STATUS.INCOMPLETE;
-    case "incomplete_expired":
-      return SUBSCRIPTION_STATUS.INCOMPLETE_EXPIRED;
-    case "trialing":
-      return SUBSCRIPTION_STATUS.TRIALING;
+    case "authenticated":
     case "active":
       return SUBSCRIPTION_STATUS.ACTIVE;
-    case "past_due":
+    case "pending":
+    case "halted":
       return SUBSCRIPTION_STATUS.PAST_DUE;
-    case "canceled":
+    case "cancelled":
       return SUBSCRIPTION_STATUS.CANCELED;
-    case "unpaid":
-      return SUBSCRIPTION_STATUS.UNPAID;
-    case "paused":
-      return SUBSCRIPTION_STATUS.PAST_DUE;
+    case "completed":
+      return SUBSCRIPTION_STATUS.CANCELED;
+    case "expired":
+      return SUBSCRIPTION_STATUS.INCOMPLETE_EXPIRED;
     default:
       return SUBSCRIPTION_STATUS.NOT_STARTED;
   }
 }
 
-function resolvePlanFromStripeObject(object) {
-  const metadataPlan = object?.metadata?.plan;
-  if (metadataPlan === PLAN_KEYS.PRO || metadataPlan === PLAN_KEYS.TEAM) {
-    return metadataPlan;
-  }
-
-  const priceId =
-    object?.items?.data?.[0]?.price?.id ??
-    object?.plan?.id ??
-    object?.price?.id ??
-    null;
-
-  if (priceId && priceId === env.stripePriceIdPro) return PLAN_KEYS.PRO;
-  if (priceId && priceId === env.stripePriceIdTeam) return PLAN_KEYS.TEAM;
+function resolvePlanFromNotes(notes) {
+  const plan = notes?.plan;
+  if (plan === PLAN_KEYS.PRO || plan === PLAN_KEYS.TEAM) return plan;
   return null;
 }
 
-function extractSeatQuantity(subscription) {
-  const quantity = (subscription?.items?.data ?? []).reduce(
-    (sum, item) => sum + Number(item.quantity ?? 0),
-    0,
-  );
-  return quantity > 0 ? quantity : null;
-}
-
-async function findUserForStripeObject(object) {
-  const userId = object?.metadata?.userId ?? object?.client_reference_id ?? null;
+async function findUserForSubscription(subscription) {
+  const userId = subscription?.notes?.userId ?? null;
   if (userId) {
     const user = await User.findById(userId);
     if (user) return user;
   }
 
-  const customerId = object?.customer ?? null;
-  if (customerId) {
-    const user = await User.findOne({ stripeCustomerId: customerId });
-    if (user) return user;
-  }
-
-  const subscriptionId =
-    (typeof object?.subscription === "string"
-      ? object.subscription
-      : object?.subscription?.id) ??
-    (object?.object === "subscription" ? object?.id : null);
-
-  if (subscriptionId) {
-    const user = await User.findOne({ stripeSubscriptionId: subscriptionId });
-    if (user) return user;
-  }
-
-  return null;
+  const user = await User.findOne({
+    razorpaySubscriptionId: subscription?.id,
+  });
+  return user;
 }
 
-async function findTeamForStripeObject(object) {
-  const teamId = object?.metadata?.teamId ?? null;
+async function findTeamForSubscription(subscription) {
+  const teamId = subscription?.notes?.teamId ?? null;
   if (teamId) {
     const team = await Team.findById(teamId);
     if (team) return team;
   }
 
-  const customerId = object?.customer ?? null;
-  if (customerId) {
-    const team = await Team.findOne({ stripeCustomerId: customerId });
-    if (team) return team;
-  }
-
-  const subscriptionId =
-    (typeof object?.subscription === "string"
-      ? object.subscription
-      : object?.subscription?.id) ??
-    (object?.object === "subscription" ? object?.id : null);
-
-  if (subscriptionId) {
-    const team = await Team.findOne({ stripeSubscriptionId: subscriptionId });
-    if (team) return team;
-  }
-
-  return null;
+  const team = await Team.findOne({
+    razorpaySubscriptionId: subscription?.id,
+  });
+  return team;
 }
 
 async function syncUserFromSubscription(user, subscription) {
-  const normalizedStatus = normalizeStripeSubscriptionStatus(subscription?.status);
-  const resolvedPlan = resolvePlanFromStripeObject(subscription) ?? user.plan;
-  const customerId = subscription?.customer ?? user.stripeCustomerId ?? null;
-  const subscriptionId = subscription?.id ?? user.stripeSubscriptionId ?? null;
-  const currentPeriodEnd = subscription?.current_period_end
-    ? new Date(subscription.current_period_end * 1000)
+  const normalizedStatus = normalizeRazorpaySubscriptionStatus(
+    subscription?.status,
+  );
+  const resolvedPlan = resolvePlanFromNotes(subscription?.notes) ?? user.plan;
+  const currentPeriodEnd = subscription?.current_end
+    ? new Date(subscription.current_end * 1000)
     : null;
 
-  user.stripeCustomerId = customerId;
-  user.stripeSubscriptionId = subscriptionId;
+  user.razorpaySubscriptionId = subscription?.id ?? user.razorpaySubscriptionId;
   user.subscriptionStatus = normalizedStatus;
   user.subscriptionCurrentPeriodEnd = currentPeriodEnd;
-
-  if (resolvedPlan === PLAN_KEYS.TEAM) {
-    user.plan = PLAN_KEYS.FREE;
-    await user.save();
-    return;
-  }
 
   user.plan =
     resolvedPlan === PLAN_KEYS.PRO && ENTITLED_STATUSES.has(normalizedStatus)
@@ -311,173 +170,71 @@ async function syncUserFromSubscription(user, subscription) {
 }
 
 async function syncTeamFromSubscription(team, subscription) {
-  const normalizedStatus = normalizeStripeSubscriptionStatus(subscription?.status);
-  const customerId = subscription?.customer ?? team.stripeCustomerId ?? null;
-  const subscriptionId = subscription?.id ?? team.stripeSubscriptionId ?? null;
-  const currentPeriodEnd = subscription?.current_period_end
-    ? new Date(subscription.current_period_end * 1000)
+  const normalizedStatus = normalizeRazorpaySubscriptionStatus(
+    subscription?.status,
+  );
+  const currentPeriodEnd = subscription?.current_end
+    ? new Date(subscription.current_end * 1000)
     : null;
-  const seatQuantity = extractSeatQuantity(subscription);
+  const quantity = Number(subscription?.quantity ?? 0);
 
-  team.stripeCustomerId = customerId;
-  team.stripeSubscriptionId = subscriptionId;
+  team.razorpaySubscriptionId = subscription?.id ?? team.razorpaySubscriptionId;
   team.subscriptionStatus = normalizedStatus;
   team.subscriptionCurrentPeriodEnd = currentPeriodEnd;
-  if (seatQuantity) {
-    team.seatsPurchased = seatQuantity;
+  if (quantity > 0) {
+    team.seatsPurchased = quantity;
   }
 
   await team.save();
 }
 
-async function handleCheckoutSessionCompleted(session) {
-  const plan = resolvePlanFromStripeObject(session);
+async function handleSubscriptionEvent(subscription) {
+  if (!subscription) return;
+
+  const plan = resolvePlanFromNotes(subscription.notes);
 
   if (plan === PLAN_KEYS.TEAM) {
-    const team = await findTeamForStripeObject(session);
+    const team = await findTeamForSubscription(subscription);
     if (!team) {
       console.warn(
-        "[payments] checkout.session.completed received for unknown team.",
+        "[payments] Razorpay subscription webhook received for unknown team.",
       );
       return;
     }
-
-    if (session?.customer) team.stripeCustomerId = session.customer;
-    if (session?.subscription) {
-      team.stripeSubscriptionId =
-        typeof session.subscription === "string"
-          ? session.subscription
-          : session.subscription.id;
-    }
-    await team.save();
-
-    if (team.stripeSubscriptionId && env.stripeSecretKey) {
-      try {
-        const subscription = await fetchStripeSubscription(team.stripeSubscriptionId);
-        if (subscription) {
-          await syncTeamFromSubscription(team, subscription);
-        }
-      } catch (err) {
-        console.error(
-          "[payments] Failed to fetch team subscription after checkout completion:",
-          err.message,
-        );
-      }
-    }
-    return;
-  }
-
-  const user = await findUserForStripeObject(session);
-  if (!user) {
-    console.warn(
-      "[payments] checkout.session.completed received for unknown user.",
-    );
-    return;
-  }
-
-  if (session?.customer) user.stripeCustomerId = session.customer;
-  if (session?.subscription) {
-    user.stripeSubscriptionId =
-      typeof session.subscription === "string"
-        ? session.subscription
-        : session.subscription.id;
-  }
-  await user.save();
-
-  if (user.stripeSubscriptionId && env.stripeSecretKey) {
-    try {
-      const subscription = await fetchStripeSubscription(user.stripeSubscriptionId);
-      if (subscription) {
-        await syncUserFromSubscription(user, subscription);
-      }
-    } catch (err) {
-      console.error(
-        "[payments] Failed to fetch subscription after checkout completion:",
-        err.message,
-      );
-    }
-  }
-}
-
-async function handleSubscriptionWebhook(subscription) {
-  const plan = resolvePlanFromStripeObject(subscription);
-
-  if (plan === PLAN_KEYS.TEAM) {
-    const team = await findTeamForStripeObject(subscription);
-    if (!team) {
-      console.warn("[payments] team subscription webhook received for unknown team.");
-      return;
-    }
-
     await syncTeamFromSubscription(team, subscription);
     return;
   }
 
-  const user = await findUserForStripeObject(subscription);
+  const user = await findUserForSubscription(subscription);
   if (!user) {
-    console.warn("[payments] subscription webhook received for unknown user.");
+    console.warn(
+      "[payments] Razorpay subscription webhook received for unknown user.",
+    );
     return;
   }
-
   await syncUserFromSubscription(user, subscription);
 }
 
-router.post(
-  "/webhook",
-  express.raw({ type: "application/json" }),
-  async (req, res) => {
-    try {
-      if (!env.stripeWebhookSecret) {
-        return res.status(503).json({
-          error:
-            "Stripe webhook is not configured. Add STRIPE_WEBHOOK_SECRET on the backend.",
-        });
-      }
+function isValidRazorpayWebhookSignature(rawBody, signatureHeader, secret) {
+  if (!signatureHeader) return false;
 
-      const signature = req.headers["stripe-signature"];
-      if (
-        !isValidStripeWebhookSignature(
-          req.body,
-          signature,
-          env.stripeWebhookSecret,
-        )
-      ) {
-        return res.status(400).json({ error: "Invalid Stripe webhook signature." });
-      }
+  const expected = crypto
+    .createHmac("sha256", secret)
+    .update(rawBody)
+    .digest("hex");
 
-      let event;
-      try {
-        event = JSON.parse(req.body.toString("utf8"));
-      } catch {
-        return res.status(400).json({ error: "Invalid Stripe webhook payload." });
-      }
+  try {
+    const left = Buffer.from(expected, "utf8");
+    const right = Buffer.from(String(signatureHeader), "utf8");
+    if (left.length !== right.length) return false;
+    return crypto.timingSafeEqual(left, right);
+  } catch {
+    return false;
+  }
+}
 
-      const object = event?.data?.object ?? null;
-
-      switch (event?.type) {
-        case "checkout.session.completed":
-          await handleCheckoutSessionCompleted(object);
-          break;
-        case "customer.subscription.created":
-        case "customer.subscription.updated":
-        case "customer.subscription.deleted":
-          await handleSubscriptionWebhook(object);
-          break;
-        default:
-          break;
-      }
-
-      return res.json({ received: true });
-    } catch (err) {
-      console.error("[payments] webhook failed:", err.message);
-      return res.status(500).json({
-        error: "Failed to process Stripe webhook.",
-      });
-    }
-  },
-);
-
-router.post("/create-checkout", requireAuth, async (req, res) => {
+// ── Create subscription: called from the pricing page to start checkout ──
+router.post("/create-subscription", requireAuth, async (req, res) => {
   try {
     const { plan } = req.body ?? {};
 
@@ -497,17 +254,18 @@ router.post("/create-checkout", requireAuth, async (req, res) => {
       });
     }
 
-    if (!env.stripeSecretKey) {
+    const razorpay = getRazorpayClient();
+    if (!razorpay) {
       return res.status(503).json({
         error:
-          "Stripe checkout is not configured. Add STRIPE_SECRET_KEY on the backend.",
+          "Razorpay is not configured. Add RAZORPAY_KEY_ID and RAZORPAY_KEY_SECRET on the backend.",
       });
     }
 
-    const priceId = getPriceIdForPlan(plan);
-    if (!priceId) {
+    const planId = getPlanIdForPlan(plan);
+    if (!planId) {
       return res.status(503).json({
-        error: `Stripe price is not configured for the ${planConfig.label} plan.`,
+        error: `Razorpay plan is not configured for the ${planConfig.label} plan.`,
       });
     }
 
@@ -516,19 +274,10 @@ router.post("/create-checkout", requireAuth, async (req, res) => {
       return res.status(404).json({ error: "User not found." });
     }
 
-    const { successUrl, cancelUrl } = buildCheckoutUrls();
-    const params = new URLSearchParams();
-    params.set("mode", "subscription");
-    params.set("success_url", successUrl);
-    params.set("cancel_url", cancelUrl);
-    params.set("line_items[0][price]", priceId);
-    params.set("allow_promotion_codes", "true");
-
     if (plan === PLAN_KEYS.TEAM) {
       if (!user.activeTeam || user.teamRole !== "owner") {
         return res.status(403).json({
-          error:
-            "Only the owner of an active team can start Team checkout.",
+          error: "Only the owner of an active team can start Team checkout.",
         });
       }
 
@@ -537,61 +286,140 @@ router.post("/create-checkout", requireAuth, async (req, res) => {
         return res.status(404).json({ error: "Active team not found." });
       }
 
-      const customerId = await ensureTeamStripeCustomer(team, user);
+      const customerId = await ensureTeamRazorpayCustomer(razorpay, team, user);
       const seatQuantity = getMinimumTeamSeatQuantity(team);
 
-      params.set("customer", customerId);
-      params.set("line_items[0][quantity]", String(seatQuantity));
-      params.set("client_reference_id", team._id.toString());
-      params.set("metadata[teamId]", team._id.toString());
-      params.set("metadata[userId]", user._id.toString());
-      params.set("metadata[plan]", plan);
-      params.set("subscription_data[metadata][teamId]", team._id.toString());
-      params.set("subscription_data[metadata][ownerUserId]", user._id.toString());
-      params.set("subscription_data[metadata][plan]", plan);
+      const subscription = await razorpay.subscriptions.create({
+        plan_id: planId,
+        customer_notify: 1,
+        total_count: RAZORPAY_TOTAL_BILLING_CYCLES,
+        quantity: seatQuantity,
+        notes: {
+          teamId: team._id.toString(),
+          ownerUserId: user._id.toString(),
+          plan,
+        },
+      });
 
-      const session = await stripeRequest("/checkout/sessions", { params });
+      // Best-effort: link the Razorpay customer we resolved above to this
+      // subscription record for later lookups (Razorpay associates the
+      // customer via the notify email, not this field, so this is just for
+      // our own reference).
+      void customerId;
 
       return res.status(201).json({
-        checkoutUrl: session.url,
-        sessionId: session.id,
+        subscriptionId: subscription.id,
+        razorpayKeyId: env.razorpayKeyId,
         plan,
         seats: seatQuantity,
+        prefill: { name: user.name, email: user.email },
       });
     }
 
-    const customerId = await ensureStripeCustomer(user);
-    params.set("customer", customerId);
-    params.set("line_items[0][quantity]", "1");
-    params.set("client_reference_id", user._id.toString());
-    params.set("metadata[userId]", user._id.toString());
-    params.set("metadata[plan]", plan);
-    params.set("subscription_data[metadata][userId]", user._id.toString());
-    params.set("subscription_data[metadata][plan]", plan);
+    await ensureRazorpayCustomer(razorpay, user);
 
-    const session = await stripeRequest("/checkout/sessions", { params });
+    const subscription = await razorpay.subscriptions.create({
+      plan_id: planId,
+      customer_notify: 1,
+      total_count: RAZORPAY_TOTAL_BILLING_CYCLES,
+      notes: {
+        userId: user._id.toString(),
+        plan,
+      },
+    });
 
     return res.status(201).json({
-      checkoutUrl: session.url,
-      sessionId: session.id,
+      subscriptionId: subscription.id,
+      razorpayKeyId: env.razorpayKeyId,
       plan,
+      prefill: { name: user.name, email: user.email },
     });
   } catch (err) {
-    console.error("[payments] create-checkout failed:", err.message);
+    console.error("[payments] create-subscription failed:", err.message);
     return res.status(err.statusCode || 502).json({
       error:
+        err.error?.description ||
         err.message ||
-        "Failed to create Stripe checkout session. Please try again.",
+        "Failed to create Razorpay subscription. Please try again.",
     });
   }
 });
 
-router.post("/create-portal-session", requireAuth, async (req, res) => {
+// ── Verify: called from the frontend Checkout.js success handler ──
+router.post("/verify-subscription", requireAuth, async (req, res) => {
   try {
-    if (!env.stripeSecretKey) {
+    const {
+      razorpay_payment_id: paymentId,
+      razorpay_subscription_id: subscriptionId,
+      razorpay_signature: signature,
+    } = req.body ?? {};
+
+    if (!paymentId || !subscriptionId || !signature) {
+      return res.status(400).json({
+        error: "Missing Razorpay payment verification fields.",
+      });
+    }
+
+    if (!env.razorpayKeySecret) {
       return res.status(503).json({
-        error:
-          "Stripe billing portal is not configured. Add STRIPE_SECRET_KEY on the backend.",
+        error: "Razorpay is not configured on the backend.",
+      });
+    }
+
+    const expectedSignature = crypto
+      .createHmac("sha256", env.razorpayKeySecret)
+      .update(`${paymentId}|${subscriptionId}`)
+      .digest("hex");
+
+    const validSignature =
+      expectedSignature.length === signature.length &&
+      crypto.timingSafeEqual(
+        Buffer.from(expectedSignature, "utf8"),
+        Buffer.from(signature, "utf8"),
+      );
+
+    if (!validSignature) {
+      return res.status(400).json({ error: "Invalid payment signature." });
+    }
+
+    const razorpay = getRazorpayClient();
+    if (!razorpay) {
+      return res.status(503).json({
+        error: "Razorpay is not configured on the backend.",
+      });
+    }
+
+    const subscription = await razorpay.subscriptions.fetch(subscriptionId);
+    await handleSubscriptionEvent(subscription);
+
+    const user = await User.findById(req.userId).select(
+      "email plan subscriptionStatus activeTeam teamRole",
+    );
+
+    return res.json({
+      verified: true,
+      plan: user?.plan ?? PLAN_KEYS.FREE,
+      subscriptionStatus:
+        user?.subscriptionStatus ?? SUBSCRIPTION_STATUS.NOT_STARTED,
+    });
+  } catch (err) {
+    console.error("[payments] verify-subscription failed:", err.message);
+    return res.status(err.statusCode || 502).json({
+      error:
+        err.error?.description ||
+        err.message ||
+        "Failed to verify Razorpay payment. Please contact support if you were charged.",
+    });
+  }
+});
+
+// ── Cancel: replaces the Stripe billing-portal "manage subscription" flow ──
+router.post("/cancel-subscription", requireAuth, async (req, res) => {
+  try {
+    const razorpay = getRazorpayClient();
+    if (!razorpay) {
+      return res.status(503).json({
+        error: "Razorpay is not configured on the backend.",
       });
     }
 
@@ -605,57 +433,112 @@ router.post("/create-portal-session", requireAuth, async (req, res) => {
     if (scope === "team") {
       if (!user.activeTeam || user.teamRole !== "owner") {
         return res.status(403).json({
-          error:
-            "Only the owner of an active team can manage Team billing.",
+          error: "Only the owner of an active team can cancel Team billing.",
         });
       }
 
       const team = await Team.findById(user.activeTeam);
-      if (!team) {
-        return res.status(404).json({ error: "Active team not found." });
-      }
-      if (!team.stripeCustomerId) {
+      if (!team?.razorpaySubscriptionId) {
         return res.status(409).json({
-          error:
-            "No Stripe billing account was found yet for this team. Start Team checkout first if you need billing management.",
+          error: "No active Team subscription was found to cancel.",
         });
       }
 
-      const params = new URLSearchParams();
-      params.set("customer", team.stripeCustomerId);
-      params.set("return_url", `${env.appUrl}/app/profile?portal=returned`);
+      // Cancel at the end of the current billing cycle so the team keeps
+      // access for time already paid for.
+      const subscription = await razorpay.subscriptions.cancel(
+        team.razorpaySubscriptionId,
+        { cancel_at_cycle_end: 1 },
+      );
+      await syncTeamFromSubscription(team, subscription);
 
-      const session = await stripeRequest("/billing_portal/sessions", { params });
-
-      return res.status(201).json({
-        portalUrl: session.url,
-      });
+      return res.json({ cancelled: true, status: subscription.status });
     }
 
-    if (!user.stripeCustomerId) {
+    if (!user.razorpaySubscriptionId) {
       return res.status(409).json({
-        error:
-          "No Stripe billing account was found yet for this user. Start a Pro checkout first if you need billing management.",
+        error: "No active subscription was found to cancel.",
       });
     }
 
-    const params = new URLSearchParams();
-    params.set("customer", user.stripeCustomerId);
-    params.set("return_url", `${env.appUrl}/app/profile?portal=returned`);
+    const subscription = await razorpay.subscriptions.cancel(
+      user.razorpaySubscriptionId,
+      { cancel_at_cycle_end: 1 },
+    );
+    await syncUserFromSubscription(user, subscription);
 
-    const session = await stripeRequest("/billing_portal/sessions", { params });
-
-    return res.status(201).json({
-      portalUrl: session.url,
-    });
+    return res.json({ cancelled: true, status: subscription.status });
   } catch (err) {
-    console.error("[payments] create-portal-session failed:", err.message);
+    console.error("[payments] cancel-subscription failed:", err.message);
     return res.status(err.statusCode || 502).json({
       error:
+        err.error?.description ||
         err.message ||
-        "Failed to create Stripe customer portal session. Please try again.",
+        "Failed to cancel the Razorpay subscription. Please try again.",
     });
   }
 });
+
+// ── Webhook: keeps plan/status in sync for renewals, failures, cancellations ──
+router.post(
+  "/webhook",
+  express.raw({ type: "application/json" }),
+  async (req, res) => {
+    try {
+      if (!env.razorpayWebhookSecret) {
+        return res.status(503).json({
+          error:
+            "Razorpay webhook is not configured. Add RAZORPAY_WEBHOOK_SECRET on the backend.",
+        });
+      }
+
+      const signature = req.headers["x-razorpay-signature"];
+      if (
+        !isValidRazorpayWebhookSignature(
+          req.body,
+          signature,
+          env.razorpayWebhookSecret,
+        )
+      ) {
+        return res
+          .status(400)
+          .json({ error: "Invalid Razorpay webhook signature." });
+      }
+
+      let event;
+      try {
+        event = JSON.parse(req.body.toString("utf8"));
+      } catch {
+        return res
+          .status(400)
+          .json({ error: "Invalid Razorpay webhook payload." });
+      }
+
+      const subscriptionEntity = event?.payload?.subscription?.entity ?? null;
+
+      switch (event?.event) {
+        case "subscription.authenticated":
+        case "subscription.activated":
+        case "subscription.charged":
+        case "subscription.completed":
+        case "subscription.cancelled":
+        case "subscription.paused":
+        case "subscription.halted":
+        case "subscription.pending":
+          await handleSubscriptionEvent(subscriptionEntity);
+          break;
+        default:
+          break;
+      }
+
+      return res.json({ received: true });
+    } catch (err) {
+      console.error("[payments] webhook failed:", err.message);
+      return res.status(500).json({
+        error: "Failed to process Razorpay webhook.",
+      });
+    }
+  },
+);
 
 export default router;

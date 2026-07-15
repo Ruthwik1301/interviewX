@@ -93,13 +93,13 @@ const teamSchema = new mongoose.Schema(
     },
 
     // ── Future Team billing mapping ────────────────────────────────────────
-    stripeCustomerId: {
+    razorpayCustomerId: {
       type: String,
       default: null,
       index: true,
       sparse: true,
     },
-    stripeSubscriptionId: {
+    razorpaySubscriptionId: {
       type: String,
       default: null,
       index: true,
@@ -146,4 +146,8 @@ teamSchema.methods.toPublicJSON = function toPublicJSON() {
 };
 
 export const Team = mongoose.model("Team", teamSchema);
-export { TEAM_ROLE_VALUES, TEAM_MEMBER_STATUS_VALUES, TEAM_INVITE_STATUS_VALUES };
+export {
+  TEAM_ROLE_VALUES,
+  TEAM_MEMBER_STATUS_VALUES,
+  TEAM_INVITE_STATUS_VALUES,
+};

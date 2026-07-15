@@ -17,6 +17,7 @@ import {
   SUBSCRIPTION_STATUS,
   getPlanConfig,
 } from "../config/billing.js";
+import { env } from "../config/env.js";
 
 const VALID_TRACKS = Object.keys(TRACK_META);
 const DSA_TRACKS = ["dsa-fundamentals", "competitive"];
@@ -64,7 +65,17 @@ function countActiveMembers(team) {
     .length;
 }
 
-export function resolveAccessContextFromState(user, team) {
+// Internal QA/testing check only. Reads from an untracked env value
+// (QA_UNLIMITED_EMAILS) - never stored on the user record, never returned
+// from any API response, and never referenced by the frontend. It only
+// removes the daily session cap; it does not change the displayed plan
+// name or unlock team/billing-only features.
+function isQaUnlimitedEmail(user) {
+  const email = user?.email?.toLowerCase?.();
+  return Boolean(email) && env.qaUnlimitedEmails.has(email);
+}
+
+function resolveAccessContextFromStateBase(user, team) {
   if (!user) {
     return {
       plan: PLAN_KEYS.FREE,
@@ -88,7 +99,8 @@ export function resolveAccessContextFromState(user, team) {
     ) {
       return {
         plan: PLAN_KEYS.TEAM,
-        dailyLimit: getPlanConfig(PLAN_KEYS.TEAM).dailySessionLimitPerMember ?? 3,
+        dailyLimit:
+          getPlanConfig(PLAN_KEYS.TEAM).dailySessionLimitPerMember ?? 3,
         team,
         teamMember: member,
       };
@@ -100,6 +112,16 @@ export function resolveAccessContextFromState(user, team) {
     plan: individualPlan,
     dailyLimit: getPlanConfig(individualPlan).dailySessionLimit ?? null,
   };
+}
+
+export function resolveAccessContextFromState(user, team) {
+  const context = resolveAccessContextFromStateBase(user, team);
+
+  if (isQaUnlimitedEmail(user)) {
+    return { ...context, dailyLimit: null };
+  }
+
+  return context;
 }
 
 async function resolveAccessContext(user) {
@@ -211,13 +233,15 @@ function evaluateAptitudeAnswer(question, answer) {
       );
     }) ?? null;
 
-  if (!normalizedAnswer || /skip this question|^skip$|noanswer/i.test(rawAnswer)) {
+  if (
+    !normalizedAnswer ||
+    /skip this question|^skip$|noanswer/i.test(rawAnswer)
+  ) {
     return {
       score: 0,
-      feedback:
-        `Question skipped. Correct answer: ${correctId}${
-          correctOption ? ` — ${correctOption.text}` : ""
-        }. ${parsed.explanation}`,
+      feedback: `Question skipped. Correct answer: ${correctId}${
+        correctOption ? ` — ${correctOption.text}` : ""
+      }. ${parsed.explanation}`,
       pronunciationFeedback: "",
     };
   }
@@ -233,20 +257,18 @@ function evaluateAptitudeAnswer(question, answer) {
   if (matchedOption) {
     return {
       score: 25,
-      feedback:
-        `Not quite. Correct answer: ${correctId}${
-          correctOption ? ` — ${correctOption.text}` : ""
-        }. ${parsed.explanation}`,
+      feedback: `Not quite. Correct answer: ${correctId}${
+        correctOption ? ` — ${correctOption.text}` : ""
+      }. ${parsed.explanation}`,
       pronunciationFeedback: "",
     };
   }
 
   return {
     score: 10,
-    feedback:
-      `Your answer could not be confidently matched to one of the options. Correct answer: ${correctId}${
-        correctOption ? ` — ${correctOption.text}` : ""
-      }. ${parsed.explanation}`,
+    feedback: `Your answer could not be confidently matched to one of the options. Correct answer: ${correctId}${
+      correctOption ? ` — ${correctOption.text}` : ""
+    }. ${parsed.explanation}`,
     pronunciationFeedback: "",
   };
 }
@@ -263,7 +285,7 @@ export async function startInterview(req, res, next) {
     }
 
     const user = await User.findById(req.userId).select(
-      "plan subscriptionStatus activeTeam teamRole",
+      "email plan subscriptionStatus activeTeam teamRole",
     );
     if (!user) {
       return res.status(404).json({ error: "User not found." });
@@ -346,7 +368,9 @@ export async function submitAnswer(req, res, next) {
     });
     if (!session) return res.status(404).json({ error: "Session not found." });
     if (session.status !== "in_progress") {
-      return res.status(409).json({ error: "Session is no longer in progress." });
+      return res
+        .status(409)
+        .json({ error: "Session is no longer in progress." });
     }
 
     // ── Intro phase ──────────────────────────────────────────────────────────

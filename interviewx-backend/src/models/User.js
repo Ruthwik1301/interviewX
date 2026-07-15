@@ -61,13 +61,13 @@ const userSchema = new mongoose.Schema(
       default: PLAN_KEYS.FREE,
       index: true,
     },
-    stripeCustomerId: {
+    razorpayCustomerId: {
       type: String,
       default: null,
       index: true,
       sparse: true,
     },
-    stripeSubscriptionId: {
+    razorpaySubscriptionId: {
       type: String,
       default: null,
       index: true,

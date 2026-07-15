@@ -50,14 +50,15 @@ function createCorsOptions() {
   };
 }
 
-const isStripeWebhook = (req) => req.originalUrl.startsWith("/api/payments/webhook");
+const isPaymentsWebhook = (req) =>
+  req.originalUrl.startsWith("/api/payments/webhook");
 
 const apiLimiter = rateLimit({
   windowMs: 15 * 60 * 1000,
   max: 120,
   standardHeaders: true,
   legacyHeaders: false,
-  skip: isStripeWebhook,
+  skip: isPaymentsWebhook,
   handler: jsonRateLimitHandler(
     "Too many API requests from this IP. Please slow down and try again shortly.",
   ),
@@ -128,7 +129,7 @@ export function createApp() {
   app.use("/api/interviews", interviewLimiter);
   app.use("/api/run", runLimiter);
 
-  // Mount payments before the global JSON parser so the Stripe webhook route
+  // Mount payments before the global JSON parser so the Razorpay webhook route
   // can preserve the raw request body needed for signature verification.
   app.use("/api/payments", paymentRoutes);
 

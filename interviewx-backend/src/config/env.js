@@ -76,7 +76,8 @@ function normalizeAbsoluteUrl(raw, envName) {
     fail(`${envName} must be a valid absolute URL. Received: ${raw}`);
   }
 
-  const normalized = `${url.origin}${url.pathname}`.replace(/\/$/, "") || url.origin;
+  const normalized =
+    `${url.origin}${url.pathname}`.replace(/\/$/, "") || url.origin;
   const suffix = `${url.search}${url.hash}`;
   return `${normalized}${suffix}`;
 }
@@ -101,6 +102,15 @@ if (isProduction) {
   failForMissing(collectMissing(requiredInProduction), "production-required");
 }
 
+function parseEmailList(value) {
+  return new Set(
+    (value || "")
+      .split(",")
+      .map((part) => part.trim().toLowerCase())
+      .filter(Boolean),
+  );
+}
+
 const corsOrigins = parseCorsOrigins(process.env.CORS_ORIGIN);
 const appUrl = normalizeAbsoluteUrl(
   process.env.APP_URL || "http://localhost:5173",
@@ -111,17 +121,8 @@ const googleCallbackUrl = normalizeAbsoluteUrl(
     "http://localhost:5000/api/auth/google/callback",
   "GOOGLE_CALLBACK_URL",
 );
-const stripeCheckoutSuccessUrl = process.env.STRIPE_CHECKOUT_SUCCESS_URL
-  ? normalizeAbsoluteUrl(
-      process.env.STRIPE_CHECKOUT_SUCCESS_URL,
-      "STRIPE_CHECKOUT_SUCCESS_URL",
-    )
-  : null;
-const stripeCheckoutCancelUrl = process.env.STRIPE_CHECKOUT_CANCEL_URL
-  ? normalizeAbsoluteUrl(
-      process.env.STRIPE_CHECKOUT_CANCEL_URL,
-      "STRIPE_CHECKOUT_CANCEL_URL",
-    )
+const paymentReturnUrl = process.env.PAYMENT_RETURN_URL
+  ? normalizeAbsoluteUrl(process.env.PAYMENT_RETURN_URL, "PAYMENT_RETURN_URL")
   : null;
 
 export const env = {
@@ -149,11 +150,16 @@ export const env = {
   jdoodleClientId: process.env.JDOODLE_CLIENT_ID || null,
   jdoodleClientSecret: process.env.JDOODLE_CLIENT_SECRET || null,
 
-  // Stripe billing
-  stripeSecretKey: process.env.STRIPE_SECRET_KEY || null,
-  stripeWebhookSecret: process.env.STRIPE_WEBHOOK_SECRET || null,
-  stripePriceIdPro: process.env.STRIPE_PRICE_ID_PRO || null,
-  stripePriceIdTeam: process.env.STRIPE_PRICE_ID_TEAM || null,
-  stripeCheckoutSuccessUrl,
-  stripeCheckoutCancelUrl,
+  // Razorpay billing
+  razorpayKeyId: process.env.RAZORPAY_KEY_ID || null,
+  razorpayKeySecret: process.env.RAZORPAY_KEY_SECRET || null,
+  razorpayWebhookSecret: process.env.RAZORPAY_WEBHOOK_SECRET || null,
+  razorpayPlanIdPro: process.env.RAZORPAY_PLAN_ID_PRO || null,
+  razorpayPlanIdTeam: process.env.RAZORPAY_PLAN_ID_TEAM || null,
+  paymentReturnUrl,
+
+  // Internal QA/testing allowlist. Purely a runtime override read from an
+  // untracked .env value - it is never persisted on the user record, never
+  // exposed via any API response, and never rendered in the frontend.
+  qaUnlimitedEmails: parseEmailList(process.env.QA_UNLIMITED_EMAILS),
 };
