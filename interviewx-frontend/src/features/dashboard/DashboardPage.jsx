@@ -513,7 +513,11 @@ function CheckoutBanner({ notice }) {
           className="mt-0.5 flex h-9 w-9 shrink-0 items-center justify-center rounded-xl"
           style={{ background: "rgba(255,255,255,0.65)" }}
         >
-          <Icon size={18} strokeWidth={2.2} style={{ color: styles.titleColor }} />
+          <Icon
+            size={18}
+            strokeWidth={2.2}
+            style={{ color: styles.titleColor }}
+          />
         </div>
         <div>
           <p
@@ -522,7 +526,10 @@ function CheckoutBanner({ notice }) {
           >
             {notice.title}
           </p>
-          <p className="mt-1 text-[13px]" style={{ color: "var(--color-text)" }}>
+          <p
+            className="mt-1 text-[13px]"
+            style={{ color: "var(--color-text)" }}
+          >
             {notice.message}
           </p>
         </div>
@@ -550,7 +557,7 @@ export default function DashboardPage() {
         tone: "success",
         title: "Payment successful",
         message:
-          "Your Stripe checkout completed successfully. Your Pro subscription is being synced now. If your upgraded limits do not appear immediately, refresh in a few seconds.",
+          "Your payment completed successfully. Your Pro subscription is being synced now. If your upgraded limits do not appear immediately, refresh in a few seconds.",
       });
       navigate(location.pathname, { replace: true });
       return;
@@ -561,7 +568,7 @@ export default function DashboardPage() {
         tone: "warning",
         title: "Checkout cancelled",
         message:
-          "Your Stripe checkout was cancelled, so your current plan has not changed. You can try again anytime from pricing.",
+          "Your checkout was cancelled, so your current plan has not changed. You can try again anytime from pricing.",
       });
       navigate(location.pathname, { replace: true });
     }

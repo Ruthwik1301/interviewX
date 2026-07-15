@@ -6,10 +6,28 @@ import TranscriptPanel from "./components/TranscriptPanel";
 import ScorecardPanel from "./components/ScorecardPanel";
 import ControlBar from "./components/ControlBar";
 
-// StrictMode in dev mounts → unmounts → remounts every component.
-// A module-level set lets us track which "start" navigations are already
-// in-flight so the second mount doesn't fire a second POST /api/interviews.
-const inFlight = new Set();
+// React StrictMode mounts, unmounts, and remounts components in development.
+// Cache the in-flight boot Promise so both mounts share the same request.
+// This prevents duplicate POST /api/interviews calls without leaving the
+// remounted component stuck in its loading state.
+const bootRequests = new Map();
+
+function getBootRequest(key, requestFactory) {
+  const existing = bootRequests.get(key);
+  if (existing) return existing;
+
+  const request = Promise.resolve()
+    .then(requestFactory)
+    .finally(() => {
+      // Delete only if this is still the Promise stored for this key.
+      if (bootRequests.get(key) === request) {
+        bootRequests.delete(key);
+      }
+    });
+
+  bootRequests.set(key, request);
+  return request;
+}
 const APTITUDE_TRACKS = [
   "numerical-reasoning",
   "logical-reasoning",
@@ -196,11 +214,8 @@ export default function InterviewRoomPage() {
     const routeState = location.state ?? {};
     const flightKey =
       id === "start"
-        ? `start:${routeState.trackId ?? "unknown"}`
+        ? `start:${routeState.trackId ?? "unknown"}:${routeState.role ?? "unknown"}:${routeState.level ?? "unknown"}`
         : `load:${id}`;
-
-    if (inFlight.has(flightKey)) return;
-    inFlight.add(flightKey);
 
     let cancelled = false;
 
@@ -210,26 +225,36 @@ export default function InterviewRoomPage() {
 
         if (id === "start") {
           const { trackId, role, level } = routeState;
+
           if (!trackId) {
-            setErrorState({
-              isLimit: false,
-              title: "No interview track selected",
-              message: "Please go back and choose a track before starting.",
-              hint: "Your setup was missing the selected track.",
-            });
-            setBooting(false);
-            inFlight.delete(flightKey);
+            if (!cancelled) {
+              setErrorState({
+                isLimit: false,
+                title: "No interview track selected",
+                message: "Please go back and choose a track before starting.",
+                hint: "Your setup was missing the selected track.",
+              });
+              setBooting(false);
+            }
             return;
           }
 
-          const data = await api.post("/api/interviews", {
-            trackId,
-            role,
-            level,
-          });
+          const data = await getBootRequest(flightKey, () =>
+            api.post("/api/interviews", {
+              trackId,
+              role,
+              level,
+            }),
+          );
+
           if (cancelled) return;
 
           sess = data.session;
+
+          if (!sess?.id) {
+            throw new Error("The server created a session without returning a session ID.");
+          }
+
           sessionIdRef.current = sess.id;
 
           navigate(`/app/interviews/${sess.id}`, {
@@ -237,9 +262,18 @@ export default function InterviewRoomPage() {
             state: null,
           });
         } else {
-          const data = await api.get(`/api/interviews/${id}`);
+          const data = await getBootRequest(flightKey, () =>
+            api.get(`/api/interviews/${id}`),
+          );
+
           if (cancelled) return;
+
           sess = data.session;
+
+          if (!sess?.id) {
+            throw new Error("The server response did not include a valid session.");
+          }
+
           sessionIdRef.current = sess.id;
 
           if (sess.status === "completed") {
@@ -264,13 +298,13 @@ export default function InterviewRoomPage() {
         setMessages(hydratedMessages);
         setAnsweredScores(scores);
         setLastFeedback(lastFb);
+        setErrorState(null);
         setBooting(false);
       } catch (err) {
         if (cancelled) return;
+        console.error("Failed to boot interview session:", err);
         setErrorState(getBootErrorState(err));
         setBooting(false);
-      } finally {
-        inFlight.delete(flightKey);
       }
     }
 
@@ -279,8 +313,7 @@ export default function InterviewRoomPage() {
     return () => {
       cancelled = true;
     };
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
+  }, [id, location.state, navigate]);
 
   // ─── Speech recognition (optional, degrades gracefully) ──────────────────
   const recognitionRef = useRef(null);

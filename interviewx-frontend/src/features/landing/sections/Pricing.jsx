@@ -12,6 +12,7 @@ import {
 import { RoutePaths } from "@/app/routes/paths";
 import { useAuth } from "@/app/providers/useAuth.js";
 import { api, ApiError, getToken } from "@/shared/lib/api.js";
+import { loadRazorpayCheckout } from "@/shared/lib/razorpay.js";
 
 const fadeUp = {
   hidden: { opacity: 0, y: 24 },
@@ -70,7 +71,9 @@ function getEffectivePlan(user) {
 }
 
 function formatSubscriptionStatus(status) {
-  const value = String(status ?? "not_started").replace(/_/g, " ").trim();
+  const value = String(status ?? "not_started")
+    .replace(/_/g, " ")
+    .trim();
   return value.charAt(0).toUpperCase() + value.slice(1);
 }
 
@@ -201,7 +204,8 @@ function getPlanCardMessage(planId, billing, usage, usageLoading) {
         return {
           tone: "neutral",
           title: "Checking today's free usage",
-          message: "Loading how many free sessions you still have available today.",
+          message:
+            "Loading how many free sessions you still have available today.",
         };
       }
 
@@ -265,7 +269,10 @@ function getPlanCardMessage(planId, billing, usage, usageLoading) {
         };
       }
 
-      const extraToday = Math.max(0, PLAN_META.pro.dailyLimit - (usage?.usedToday ?? 0));
+      const extraToday = Math.max(
+        0,
+        PLAN_META.pro.dailyLimit - (usage?.usedToday ?? 0),
+      );
       const reachedFreeLimit = (usage?.remainingToday ?? 0) === 0;
 
       return reachedFreeLimit
@@ -599,15 +606,19 @@ function BillingStatusBanner({ billing, usage, usageLoading }) {
           {[
             {
               label: "Daily limit",
-              value: usageLoading ? "—" : usage?.dailyLimit ?? billing.dailyLimit,
+              value: usageLoading
+                ? "—"
+                : (usage?.dailyLimit ?? billing.dailyLimit),
             },
             {
               label: "Used today",
-              value: usageLoading ? "—" : usage?.usedToday ?? 0,
+              value: usageLoading ? "—" : (usage?.usedToday ?? 0),
             },
             {
               label: "Remaining",
-              value: usageLoading ? "—" : usage?.remainingToday ?? billing.dailyLimit,
+              value: usageLoading
+                ? "—"
+                : (usage?.remainingToday ?? billing.dailyLimit),
             },
           ].map((item) => (
             <div
@@ -670,7 +681,11 @@ function CheckoutBanner({ notice }) {
           className="mt-0.5 flex h-9 w-9 shrink-0 items-center justify-center rounded-xl"
           style={{ background: "rgba(255,255,255,0.65)" }}
         >
-          <Icon size={18} strokeWidth={2.2} style={{ color: styles.titleColor }} />
+          <Icon
+            size={18}
+            strokeWidth={2.2}
+            style={{ color: styles.titleColor }}
+          />
         </div>
         <div>
           <p
@@ -679,7 +694,10 @@ function CheckoutBanner({ notice }) {
           >
             {notice.title}
           </p>
-          <p className="mt-1 text-[13px]" style={{ color: "var(--color-text)" }}>
+          <p
+            className="mt-1 text-[13px]"
+            style={{ color: "var(--color-text)" }}
+          >
             {notice.message}
           </p>
         </div>
@@ -691,7 +709,7 @@ function CheckoutBanner({ notice }) {
 export default function Pricing() {
   const navigate = useNavigate();
   const location = useLocation();
-  const { user } = useAuth();
+  const { user, refreshUser } = useAuth();
   const billing = user ? getBillingSummary(user) : null;
   const [loadingPlan, setLoadingPlan] = useState("");
   const [error, setError] = useState("");
@@ -708,7 +726,7 @@ export default function Pricing() {
         tone: "success",
         title: "Payment successful",
         message:
-          "Your Stripe checkout completed successfully. If your Pro plan was purchased for a logged-in account, subscription sync may take a few seconds.",
+          "Your payment completed successfully. If your Pro plan was purchased for a logged-in account, subscription sync may take a few seconds.",
       });
       navigate(location.pathname, { replace: true });
       return;
@@ -719,7 +737,7 @@ export default function Pricing() {
         tone: "warning",
         title: "Checkout cancelled",
         message:
-          "Your Stripe checkout was cancelled, so no billing change was applied. You can start checkout again anytime.",
+          "Your checkout was cancelled, so no billing change was applied. You can start checkout again anytime.",
       });
       navigate(location.pathname, { replace: true });
     }
@@ -776,15 +794,72 @@ export default function Pricing() {
 
     setLoadingPlan(planId);
     try {
-      const data = await api.post("/api/payments/create-checkout", {
+      const data = await api.post("/api/payments/create-subscription", {
         plan: planId,
       });
 
-      if (!data?.checkoutUrl) {
-        throw new ApiError("Stripe checkout URL was not returned.", 502);
+      if (!data?.subscriptionId || !data?.razorpayKeyId) {
+        throw new ApiError(
+          "Razorpay subscription details were not returned.",
+          502,
+        );
       }
 
-      window.location.assign(data.checkoutUrl);
+      const Razorpay = await loadRazorpayCheckout();
+
+      const rzp = new Razorpay({
+        key: data.razorpayKeyId,
+        subscription_id: data.subscriptionId,
+        name: "InterviewX",
+        description: "Pro plan subscription",
+        prefill: data.prefill ?? {},
+        theme: { color: "#7C3AED" },
+        handler: async (response) => {
+          try {
+            await api.post("/api/payments/verify-subscription", {
+              razorpay_payment_id: response.razorpay_payment_id,
+              razorpay_subscription_id: response.razorpay_subscription_id,
+              razorpay_signature: response.razorpay_signature,
+            });
+
+            await refreshUser();
+            setCheckoutNotice({
+              tone: "success",
+              title: "Payment successful",
+              message: "You're now on the Pro plan. Enjoy your extra sessions!",
+            });
+          } catch (err) {
+            setError(
+              err instanceof ApiError
+                ? err.message
+                : "Payment was received but we couldn't verify it automatically. Please refresh in a moment, or contact support if your plan hasn't updated.",
+            );
+          } finally {
+            setLoadingPlan("");
+          }
+        },
+        modal: {
+          ondismiss: () => {
+            setLoadingPlan("");
+            setCheckoutNotice({
+              tone: "warning",
+              title: "Checkout cancelled",
+              message:
+                "Your checkout was cancelled, so no billing change was applied. You can start checkout again anytime.",
+            });
+          },
+        },
+      });
+
+      rzp.on("payment.failed", (response) => {
+        setLoadingPlan("");
+        setError(
+          response?.error?.description ||
+            "Payment failed. Please try again or use a different payment method.",
+        );
+      });
+
+      rzp.open();
     } catch (err) {
       if (err instanceof ApiError && err.status === 401) {
         navigate(RoutePaths.login);
@@ -794,7 +869,7 @@ export default function Pricing() {
       setError(
         err instanceof ApiError
           ? err.message
-          : "Could not start Stripe checkout. Please try again.",
+          : "Could not start checkout. Please try again.",
       );
       setLoadingPlan("");
     }
@@ -906,8 +981,8 @@ export default function Pricing() {
           style={{ color: "var(--color-text-muted)" }}
         >
           All prices in INR. Free users can upgrade to Pro securely through
-          Stripe. Team billing will be enabled in a later phase with team/member
-          support.
+          Razorpay. Team billing will be enabled in a later phase with
+          team/member support.
         </motion.p>
       </div>
 

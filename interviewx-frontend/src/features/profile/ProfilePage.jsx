@@ -4,6 +4,7 @@ import { useLocation, useNavigate } from "react-router-dom";
 import { TrendingUp, Award, Flame, Camera, Check } from "lucide-react";
 import { useAuth } from "@/app/providers/useAuth.js";
 import { api, ApiError } from "@/shared/lib/api.js";
+import { loadRazorpayCheckout } from "@/shared/lib/razorpay.js";
 
 const fadeUp = {
   hidden: { opacity: 0, y: 16 },
@@ -86,7 +87,9 @@ function getEffectivePlan(user) {
 }
 
 function formatSubscriptionStatus(status) {
-  const value = String(status ?? "not_started").replace(/_/g, " ").trim();
+  const value = String(status ?? "not_started")
+    .replace(/_/g, " ")
+    .trim();
   return value.charAt(0).toUpperCase() + value.slice(1);
 }
 
@@ -136,7 +139,8 @@ function computeDayStreak(sessions) {
 
 function computeProfileStats(sessions) {
   const completed = sessions.filter(
-    (session) => session.status === "completed" && session.report?.overall != null,
+    (session) =>
+      session.status === "completed" && session.report?.overall != null,
   );
 
   const avgScore =
@@ -427,8 +431,7 @@ export default function ProfilePage() {
   const transferCandidates = activeTeamMembers.filter(
     (member) => member.userId !== user?.id && member.role !== "owner",
   );
-  const canManageMembers =
-    team?.myRole === "owner" || team?.myRole === "admin";
+  const canManageMembers = team?.myRole === "owner" || team?.myRole === "admin";
   const teamSubscriptionEntitled =
     team?.subscriptionStatus === "active" ||
     team?.subscriptionStatus === "trialing" ||
@@ -442,10 +445,9 @@ export default function ProfilePage() {
 
     setInviteTokenStatus({
       tone: "info",
-      message:
-        team
-          ? "A team invite token is present, but you already belong to a team. Leave your current team before accepting a different invite."
-          : "You're signed in with an invited email. Accept the team invite below to join the team.",
+      message: team
+        ? "A team invite token is present, but you already belong to a team. Leave your current team before accepting a different invite."
+        : "You're signed in with an invited email. Accept the team invite below to join the team.",
     });
   }, [teamInviteToken, team]);
 
@@ -595,7 +597,9 @@ export default function ProfilePage() {
     setTeamError("");
     setTeamNotice("");
     try {
-      const { team } = await api.post("/api/team/transfer-ownership", { userId });
+      const { team } = await api.post("/api/team/transfer-ownership", {
+        userId,
+      });
       setTeam(team ?? null);
       setTransferTargetId("");
       setTeamNotice("Ownership transferred successfully.");
@@ -636,27 +640,31 @@ export default function ProfilePage() {
   }
 
   async function handleManageBilling() {
+    const confirmed = window.confirm(
+      "Cancel your Pro subscription? You'll keep Pro access until the end of your current billing cycle, then drop back to the Free plan.",
+    );
+    if (!confirmed) return;
+
     setManagingBilling(true);
     setBillingNotice(null);
 
     try {
-      const data = await api.post("/api/payments/create-portal-session", {});
-      if (!data?.portalUrl) {
-        throw new ApiError(
-          "Stripe billing portal URL was not returned.",
-          502,
-        );
-      }
-
-      window.location.assign(data.portalUrl);
+      await api.post("/api/payments/cancel-subscription", {});
+      await refreshUser();
+      setBillingNotice({
+        tone: "success",
+        message:
+          "Your subscription has been scheduled to cancel at the end of the current billing cycle.",
+      });
     } catch (err) {
       setBillingNotice({
         tone: "warning",
         message:
           err instanceof ApiError
             ? err.message
-            : "Could not open the billing portal right now. Please try again.",
+            : "Could not cancel your subscription right now. Please try again.",
       });
+    } finally {
       setManagingBilling(false);
     }
   }
@@ -726,13 +734,58 @@ export default function ProfilePage() {
     setTeamError("");
     setTeamNotice("");
     try {
-      const data = await api.post("/api/payments/create-checkout", {
+      const data = await api.post("/api/payments/create-subscription", {
         plan: "team",
       });
-      if (!data?.checkoutUrl) {
-        throw new ApiError("Stripe checkout URL was not returned.", 502);
+      if (!data?.subscriptionId || !data?.razorpayKeyId) {
+        throw new ApiError(
+          "Razorpay subscription details were not returned.",
+          502,
+        );
       }
-      window.location.assign(data.checkoutUrl);
+
+      const Razorpay = await loadRazorpayCheckout();
+
+      const rzp = new Razorpay({
+        key: data.razorpayKeyId,
+        subscription_id: data.subscriptionId,
+        name: "InterviewX",
+        description: `Team plan · ${data.seats ?? ""} seats`.trim(),
+        prefill: data.prefill ?? { name: user?.name, email: user?.email },
+        theme: { color: "#7C3AED" },
+        handler: async (response) => {
+          try {
+            await api.post("/api/payments/verify-subscription", {
+              razorpay_payment_id: response.razorpay_payment_id,
+              razorpay_subscription_id: response.razorpay_subscription_id,
+              razorpay_signature: response.razorpay_signature,
+            });
+            await refreshUser();
+            setTeamNotice("Team billing is now active.");
+          } catch (err) {
+            setTeamError(
+              err instanceof ApiError
+                ? err.message
+                : "Payment was received but we couldn't verify it automatically. Please refresh in a moment.",
+            );
+          } finally {
+            setStartingTeamBilling(false);
+          }
+        },
+        modal: {
+          ondismiss: () => setStartingTeamBilling(false),
+        },
+      });
+
+      rzp.on("payment.failed", (response) => {
+        setStartingTeamBilling(false);
+        setTeamError(
+          response?.error?.description ||
+            "Payment failed. Please try again or use a different payment method.",
+        );
+      });
+
+      rzp.open();
     } catch (err) {
       setTeamError(
         err instanceof ApiError
@@ -744,26 +797,27 @@ export default function ProfilePage() {
   }
 
   async function handleManageTeamBilling() {
+    const confirmed = window.confirm(
+      "Cancel your Team subscription? Your team keeps access until the end of the current billing cycle, then drops back to Free.",
+    );
+    if (!confirmed) return;
+
     setManagingTeamBilling(true);
     setTeamError("");
     setTeamNotice("");
     try {
-      const data = await api.post("/api/payments/create-portal-session", {
-        scope: "team",
-      });
-      if (!data?.portalUrl) {
-        throw new ApiError(
-          "Stripe billing portal URL was not returned.",
-          502,
-        );
-      }
-      window.location.assign(data.portalUrl);
+      await api.post("/api/payments/cancel-subscription", { scope: "team" });
+      await refreshUser();
+      setTeamNotice(
+        "Team subscription scheduled to cancel at the end of the current billing cycle.",
+      );
     } catch (err) {
       setTeamError(
         err instanceof ApiError
           ? err.message
-          : "Could not open Team billing management right now.",
+          : "Could not cancel Team billing right now.",
       );
+    } finally {
       setManagingTeamBilling(false);
     }
   }
@@ -1072,23 +1126,25 @@ export default function ProfilePage() {
                   </div>
                 )}
 
-                <button
-                  type="button"
-                  onClick={handleManageBilling}
-                  disabled={managingBilling || refreshingBilling}
-                  className="rounded-xl border px-4 py-2.5 text-sm font-semibold transition-colors disabled:cursor-not-allowed disabled:opacity-70"
-                  style={{
-                    background: "var(--color-surface-2)",
-                    borderColor: "var(--color-border)",
-                    color: "var(--color-text-invert)",
-                  }}
-                >
-                  {managingBilling
-                    ? "Opening Billing…"
-                    : refreshingBilling
-                      ? "Refreshing Status…"
-                      : "Manage Billing"}
-                </button>
+                {billing.plan === "pro" && (
+                  <button
+                    type="button"
+                    onClick={handleManageBilling}
+                    disabled={managingBilling || refreshingBilling}
+                    className="rounded-xl border px-4 py-2.5 text-sm font-semibold transition-colors disabled:cursor-not-allowed disabled:opacity-70"
+                    style={{
+                      background: "var(--color-surface-2)",
+                      borderColor: "var(--color-border)",
+                      color: "var(--color-text-invert)",
+                    }}
+                  >
+                    {managingBilling
+                      ? "Cancelling…"
+                      : refreshingBilling
+                        ? "Refreshing Status…"
+                        : "Cancel Subscription"}
+                  </button>
+                )}
               </div>
             </div>
           </SectionCard>
@@ -1132,13 +1188,18 @@ export default function ProfilePage() {
                         "linear-gradient(135deg, var(--color-accent) 0%, #9333ea 100%)",
                     }}
                   >
-                    {acceptingInvite ? "Accepting Invite…" : "Accept Team Invite"}
+                    {acceptingInvite
+                      ? "Accepting Invite…"
+                      : "Accept Team Invite"}
                   </button>
                 )}
               </div>
             )}
             {teamLoading ? (
-              <p className="text-sm" style={{ color: "var(--color-text-muted)" }}>
+              <p
+                className="text-sm"
+                style={{ color: "var(--color-text-muted)" }}
+              >
                 Loading your team…
               </p>
             ) : team ? (
@@ -1160,7 +1221,9 @@ export default function ProfilePage() {
                           color: "#0ea5e9",
                         }}
                       >
-                        {String(team.myRole ?? "member").replace(/^./, (c) => c.toUpperCase())}
+                        {String(team.myRole ?? "member").replace(/^./, (c) =>
+                          c.toUpperCase(),
+                        )}
                       </span>
                       <span
                         className="inline-flex items-center rounded-full border px-2.5 py-1 text-[11px] font-medium"
@@ -1314,7 +1377,7 @@ export default function ProfilePage() {
                         style={{ color: "var(--color-text)" }}
                       >
                         {teamSubscriptionEntitled
-                          ? "Your team already has an entitled subscription. You can manage seats, payment methods, and invoices through Stripe."
+                          ? "Your team already has an entitled subscription. You can manage seats and billing below."
                           : "Team billing is not active yet. Start Team checkout to activate team subscription benefits and seat-backed access."}
                       </p>
                     </div>
@@ -1330,10 +1393,12 @@ export default function ProfilePage() {
                               "linear-gradient(135deg, var(--color-accent) 0%, #9333ea 100%)",
                           }}
                         >
-                          {startingTeamBilling ? "Starting Checkout…" : "Start Team Billing"}
+                          {startingTeamBilling
+                            ? "Starting Checkout…"
+                            : "Start Team Billing"}
                         </button>
                       )}
-                      {team.stripeCustomerId && (
+                      {team.razorpaySubscriptionId && (
                         <button
                           type="button"
                           onClick={handleManageTeamBilling}
@@ -1345,7 +1410,9 @@ export default function ProfilePage() {
                             color: "var(--color-text-invert)",
                           }}
                         >
-                          {managingTeamBilling ? "Opening Portal…" : "Manage Team Billing"}
+                          {managingTeamBilling
+                            ? "Cancelling…"
+                            : "Cancel Team Billing"}
                         </button>
                       )}
                     </div>
@@ -1353,10 +1420,13 @@ export default function ProfilePage() {
                 )}
 
                 {canManageMembers && (
-                  <div className="space-y-3 rounded-xl border p-4" style={{
-                    background: "var(--color-surface-2)",
-                    borderColor: "var(--color-border)",
-                  }}>
+                  <div
+                    className="space-y-3 rounded-xl border p-4"
+                    style={{
+                      background: "var(--color-surface-2)",
+                      borderColor: "var(--color-border)",
+                    }}
+                  >
                     <p
                       className="text-[11px] font-bold uppercase tracking-wider"
                       style={{ color: "var(--color-text-muted)" }}
@@ -1411,10 +1481,13 @@ export default function ProfilePage() {
                 )}
 
                 {team.myRole === "owner" && (
-                  <div className="space-y-3 rounded-xl border p-4" style={{
-                    background: "var(--color-surface-2)",
-                    borderColor: "var(--color-border)",
-                  }}>
+                  <div
+                    className="space-y-3 rounded-xl border p-4"
+                    style={{
+                      background: "var(--color-surface-2)",
+                      borderColor: "var(--color-border)",
+                    }}
+                  >
                     <p
                       className="text-[11px] font-bold uppercase tracking-wider"
                       style={{ color: "var(--color-text-muted)" }}
@@ -1430,7 +1503,11 @@ export default function ProfilePage() {
                           New Owner
                         </label>
                         <select
-                          value={transferTargetId || transferCandidates[0]?.userId || ""}
+                          value={
+                            transferTargetId ||
+                            transferCandidates[0]?.userId ||
+                            ""
+                          }
                           onChange={(e) => setTransferTargetId(e.target.value)}
                           className="w-full rounded-xl border px-4 py-3 text-sm outline-none"
                           style={{
@@ -1438,14 +1515,20 @@ export default function ProfilePage() {
                             borderColor: "var(--color-border)",
                             color: "var(--color-text)",
                           }}
-                          disabled={transferCandidates.length === 0 || transferSubmitting}
+                          disabled={
+                            transferCandidates.length === 0 ||
+                            transferSubmitting
+                          }
                         >
                           {transferCandidates.length === 0 ? (
-                            <option value="">No active members available</option>
+                            <option value="">
+                              No active members available
+                            </option>
                           ) : (
                             transferCandidates.map((member) => (
                               <option key={member.userId} value={member.userId}>
-                                {member.name || member.email || member.userId} {member.email ? `(${member.email})` : ""}
+                                {member.name || member.email || member.userId}{" "}
+                                {member.email ? `(${member.email})` : ""}
                               </option>
                             ))
                           )}
@@ -1454,18 +1537,26 @@ export default function ProfilePage() {
                       <button
                         type="button"
                         onClick={handleTransferOwnership}
-                        disabled={transferSubmitting || transferCandidates.length === 0}
+                        disabled={
+                          transferSubmitting || transferCandidates.length === 0
+                        }
                         className="rounded-xl px-5 py-3 text-sm font-semibold text-white disabled:opacity-70"
                         style={{
                           background:
                             "linear-gradient(135deg, var(--color-accent) 0%, #9333ea 100%)",
                         }}
                       >
-                        {transferSubmitting ? "Transferring…" : "Transfer Ownership"}
+                        {transferSubmitting
+                          ? "Transferring…"
+                          : "Transfer Ownership"}
                       </button>
                     </div>
-                    <p className="text-[12px]" style={{ color: "var(--color-text-muted)" }}>
-                      Owners must transfer ownership before leaving a team that still has other active members.
+                    <p
+                      className="text-[12px]"
+                      style={{ color: "var(--color-text-muted)" }}
+                    >
+                      Owners must transfer ownership before leaving a team that
+                      still has other active members.
                     </p>
                   </div>
                 )}
@@ -1499,7 +1590,8 @@ export default function ProfilePage() {
                               className="text-[12px] truncate"
                               style={{ color: "var(--color-text-muted)" }}
                             >
-                              Invited {formatDateTime(invite.invitedAt)} · Expires {formatDateTime(invite.expiresAt)}
+                              Invited {formatDateTime(invite.invitedAt)} ·
+                              Expires {formatDateTime(invite.expiresAt)}
                             </p>
                           </div>
                           <div className="flex flex-wrap items-center gap-2 sm:justify-end">
@@ -1511,7 +1603,9 @@ export default function ProfilePage() {
                                 color: "var(--color-text-muted)",
                               }}
                             >
-                              {String(invite.role).replace(/^./, (c) => c.toUpperCase())}
+                              {String(invite.role).replace(/^./, (c) =>
+                                c.toUpperCase(),
+                              )}
                             </span>
                             <button
                               type="button"
@@ -1524,7 +1618,9 @@ export default function ProfilePage() {
                                 background: "var(--color-accent-bg)",
                               }}
                             >
-                              {resendingInviteEmail === invite.email ? "Resending…" : "Resend"}
+                              {resendingInviteEmail === invite.email
+                                ? "Resending…"
+                                : "Resend"}
                             </button>
                             <button
                               type="button"
@@ -1537,7 +1633,9 @@ export default function ProfilePage() {
                                 background: "var(--color-error-bg)",
                               }}
                             >
-                              {revokingInviteEmail === invite.email ? "Revoking…" : "Revoke"}
+                              {revokingInviteEmail === invite.email
+                                ? "Revoking…"
+                                : "Revoke"}
                             </button>
                           </div>
                         </div>
@@ -1566,10 +1664,12 @@ export default function ProfilePage() {
                       }}
                     >
                       {leavingTeam
-                        ? team.myRole === "owner" && activeTeamMembers.length === 1
+                        ? team.myRole === "owner" &&
+                          activeTeamMembers.length === 1
                           ? "Deleting Team…"
                           : "Leaving…"
-                        : team.myRole === "owner" && activeTeamMembers.length === 1
+                        : team.myRole === "owner" &&
+                            activeTeamMembers.length === 1
                           ? "Delete Team"
                           : "Leave Team"}
                     </button>
@@ -1614,7 +1714,9 @@ export default function ProfilePage() {
                                 color: "var(--color-text-muted)",
                               }}
                             >
-                              {String(member.role).replace(/^./, (c) => c.toUpperCase())}
+                              {String(member.role).replace(/^./, (c) =>
+                                c.toUpperCase(),
+                              )}
                             </span>
                             <span
                               className="inline-flex items-center rounded-full border px-2.5 py-1 text-[11px] font-medium"
@@ -1633,12 +1735,16 @@ export default function ProfilePage() {
                                     : "var(--color-text-muted)",
                               }}
                             >
-                              {String(member.status).replace(/^./, (c) => c.toUpperCase())}
+                              {String(member.status).replace(/^./, (c) =>
+                                c.toUpperCase(),
+                              )}
                             </span>
                             {canRemove && (
                               <button
                                 type="button"
-                                onClick={() => handleRemoveMember(member.userId)}
+                                onClick={() =>
+                                  handleRemoveMember(member.userId)
+                                }
                                 disabled={removingMemberId === member.userId}
                                 className="rounded-lg border px-3 py-1.5 text-[11px] font-semibold disabled:opacity-70"
                                 style={{
@@ -1647,7 +1753,9 @@ export default function ProfilePage() {
                                   background: "var(--color-error-bg)",
                                 }}
                               >
-                                {removingMemberId === member.userId ? "Removing…" : "Remove"}
+                                {removingMemberId === member.userId
+                                  ? "Removing…"
+                                  : "Remove"}
                               </button>
                             )}
                           </div>
@@ -1659,8 +1767,12 @@ export default function ProfilePage() {
               </div>
             ) : (
               <div className="space-y-4">
-                <p className="text-sm" style={{ color: "var(--color-text-muted)" }}>
-                  You are not part of a team yet. Create one now to start building out team membership and future Team billing support.
+                <p
+                  className="text-sm"
+                  style={{ color: "var(--color-text-muted)" }}
+                >
+                  You are not part of a team yet. Create one now to start
+                  building out team membership and future Team billing support.
                 </p>
                 <div className="grid grid-cols-1 gap-4 sm:grid-cols-[1fr_auto] sm:items-end">
                   <InputField
