@@ -115,6 +115,7 @@ export default function Navbar({ variant = "public" }) {
         {/* Brand */}
         <NavLink
           to={RoutePaths.root}
+          onClick={() => window.scrollTo({ top: 0, behavior: "smooth" })}
           className="inline-flex items-center gap-2 rounded-lg px-2 py-1 text-[15px] font-semibold tracking-tight text-[color:var(--color-text)] transition-colors hover:bg-[color:var(--color-accent-bg)]"
         >
           <span className="flex h-6 w-6 items-center justify-center rounded-md bg-[color:var(--color-accent)] text-[11px] font-bold leading-none text-white">
