@@ -121,7 +121,7 @@ export default function Footer() {
               className="mx-auto mt-4 max-w-[420px] text-base leading-relaxed"
               style={{ color: 'var(--color-text-muted)' }}
             >
-              Join 12,000+ candidates already using InterviewX to land roles at top companies. No
+              Practice with a live DSA coding room and land roles at top companies. No
               credit card required.
             </p>
 
@@ -193,7 +193,7 @@ export default function Footer() {
 
             <div className="mt-6 flex items-center gap-2">
               {SOCIALS.map(({ label, href, svg }) => (
-                <a
+                
                   key={label}
                   href={href}
                   target="_blank"
