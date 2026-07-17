@@ -16,10 +16,7 @@ const requiredInProduction = [
   "GOOGLE_CALLBACK_URL",
   "JDOODLE_CLIENT_ID",
   "JDOODLE_CLIENT_SECRET",
-  "STRIPE_SECRET_KEY",
-  "STRIPE_WEBHOOK_SECRET",
-  "STRIPE_PRICE_ID_PRO",
-  "STRIPE_PRICE_ID_TEAM",
+  
 ];
 
 function collectMissing(keys) {
