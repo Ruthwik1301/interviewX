@@ -157,7 +157,7 @@ body {
   min-height: 100%;
   background: var(--color-bg);
   color: var(--color-text);
-  overflow-x: hidden;
+  overflow-x: clip;
 }
 
 #root {
