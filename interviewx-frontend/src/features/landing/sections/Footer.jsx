@@ -193,7 +193,7 @@ export default function Footer() {
 
             <div className="mt-6 flex items-center gap-2">
               {SOCIALS.map(({ label, href, svg }) => (
-                
+                <a
                   key={label}
                   href={href}
                   target="_blank"
