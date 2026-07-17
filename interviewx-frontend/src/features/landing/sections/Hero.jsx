@@ -338,9 +338,8 @@ export default function Hero() {
                 ))}
               </div>
               <span>
-                Trusted by{" "}
-                <strong style={{ color: "var(--color-text)" }}>12,000+</strong>{" "}
-                candidates
+                Includes a live{" "}
+                <strong style={{ color: "var(--color-text)" }}>DSA Room</strong>
               </span>
               <span style={{ color: "var(--color-border-strong)" }}>·</span>
               <span>⭐ 4.9 / 5</span>
@@ -366,7 +365,7 @@ export default function Hero() {
             borderColor: "var(--color-border)",
           }}
         >
-          <Stat value="12K+" label="Candidates Trained" />
+          <Stat value="DSA Room" label="Live Coding Practice" />
           <div
             className="hidden h-8 w-px sm:block"
             style={{ background: "var(--color-border)" }}
