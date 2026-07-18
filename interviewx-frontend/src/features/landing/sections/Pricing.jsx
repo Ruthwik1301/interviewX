@@ -135,7 +135,7 @@ const PLANS = [
     ctaTo: RoutePaths.register,
     highlighted: false,
     features: [
-      "2 interview sessions per day",
+      "5 interview sessions per day",
       "All 16 interview tracks",
       "DSA coding room (Monaco editor)",
       "Voice input & pronunciation tips",
@@ -156,7 +156,7 @@ const PLANS = [
     highlighted: true,
     badge: "Most Popular",
     features: [
-      "5 interview sessions per day",
+      "10 interview sessions per day",
       "All 16 interview tracks",
       "DSA coding room (Monaco editor)",
       "Voice input & pronunciation tips",
@@ -182,7 +182,7 @@ const PLANS = [
     highlighted: false,
     disabled: true,
     features: [
-      "3 interview sessions per member per day",
+      "8 interview sessions per member per day",
       "Everything in Pro",
       "Minimum 5 seats",
       "Admin dashboard",
@@ -220,8 +220,7 @@ function getPlanCardMessage(planId, billing, usage, usageLoading) {
       return {
         tone: "warning",
         title: "Today's free limit reached",
-        message:
-          "You've used both free sessions today. Upgrading to Pro would raise today's allowance to 5 sessions.",
+        message: `You've used both free sessions today. Upgrading to Pro would raise today's allowance to ${PLAN_META.pro.dailyLimit} sessions.`,
       };
     }
 
@@ -229,8 +228,7 @@ function getPlanCardMessage(planId, billing, usage, usageLoading) {
       return {
         tone: "warning",
         title: "Lower allowance than your current plan",
-        message:
-          "You're already on Pro. Moving back to Free would reduce your daily interview allowance from 5 to 2.",
+        message: `You're already on Pro. Moving back to Free would reduce your daily interview allowance from ${PLAN_META.pro.dailyLimit} to ${PLAN_META.free.dailyLimit}.`,
       };
     }
 
@@ -264,8 +262,7 @@ function getPlanCardMessage(planId, billing, usage, usageLoading) {
         return {
           tone: "neutral",
           title: "More room to practise",
-          message:
-            "Pro raises your daily allowance from 2 sessions to 5 sessions per UTC day.",
+          message: `Pro raises your daily allowance from ${PLAN_META.free.dailyLimit} sessions to ${PLAN_META.pro.dailyLimit} sessions per UTC day.`,
         };
       }
 
@@ -279,14 +276,12 @@ function getPlanCardMessage(planId, billing, usage, usageLoading) {
         ? {
             tone: "warning",
             title: `Unlock up to ${extraToday} more session${extraToday === 1 ? "" : "s"} today`,
-            message:
-              "You've hit today's free limit. Upgrading to Pro increases your daily cap to 5 immediately.",
+            message: `You've hit today's free limit. Upgrading to Pro increases your daily cap to ${PLAN_META.pro.dailyLimit} immediately.`,
           }
         : {
             tone: "success",
             title: `Upgrade for ${extraToday} total sessions remaining today`,
-            message:
-              "You're still on Free, but Pro would increase today's limit to 5 and give you more room to practise.",
+            message: `You're still on Free, but Pro would increase today's limit to ${PLAN_META.pro.dailyLimit} and give you more room to practise.`,
           };
     }
 

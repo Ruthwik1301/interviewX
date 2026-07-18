@@ -471,9 +471,9 @@ function PlanUsageCard({ usage, loading, onUpgrade }) {
           {loading
             ? "Loading your current plan and daily usage…"
             : usage.plan === "free"
-              ? "Free plan includes 2 interview sessions per UTC day. Upgrade to Pro to increase this to 5 sessions per day."
+              ? `Free plan includes ${PLAN_META.free.dailyLimit} interview sessions per UTC day. Upgrade to Pro to increase this to ${PLAN_META.pro.dailyLimit} sessions per day.`
               : usage.plan === "pro"
-                ? "Your Pro plan currently allows up to 5 interview sessions per UTC day."
+                ? `Your Pro plan currently allows up to ${PLAN_META.pro.dailyLimit} interview sessions per UTC day.`
                 : "Team plan is reserved for future team/member support. Current limits are shown per member."}
         </p>
       </div>
