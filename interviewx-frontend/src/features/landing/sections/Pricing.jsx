@@ -40,7 +40,7 @@ const PLAN_META = {
     background: "var(--color-surface-3)",
     border: "var(--color-border)",
     cta: "Current Plan",
-    dailyLimit: 2,
+    dailyLimit: 5,
   },
   pro: {
     label: "Pro",
@@ -48,7 +48,7 @@ const PLAN_META = {
     background: "var(--color-accent-bg)",
     border: "var(--color-accent-border)",
     cta: "Current Plan",
-    dailyLimit: 5,
+    dailyLimit: 10,
   },
   team: {
     label: "Team",
@@ -56,7 +56,7 @@ const PLAN_META = {
     background: "rgba(14,165,233,0.12)",
     border: "rgba(14,165,233,0.25)",
     cta: "Managed Separately",
-    dailyLimit: 3,
+    dailyLimit: 8,
   },
 };
 

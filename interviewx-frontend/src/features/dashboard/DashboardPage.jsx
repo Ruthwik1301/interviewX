@@ -69,21 +69,21 @@ const ENTITLED_SUBSCRIPTION_STATUSES = new Set([
 const PLAN_META = {
   free: {
     label: "Free",
-    dailyLimit: 2,
+    dailyLimit: 5,
     accent: "var(--color-text-muted)",
     background: "var(--color-surface-3)",
     border: "var(--color-border)",
   },
   pro: {
     label: "Pro",
-    dailyLimit: 5,
+    dailyLimit: 10,
     accent: "var(--color-accent)",
     background: "var(--color-accent-bg)",
     border: "var(--color-accent-border)",
   },
   team: {
     label: "Team",
-    dailyLimit: 3,
+    dailyLimit: 8,
     accent: "#0ea5e9",
     background: "rgba(14,165,233,0.12)",
     border: "rgba(14,165,233,0.25)",
