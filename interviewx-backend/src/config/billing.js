@@ -24,31 +24,29 @@ export const PLAN_CONFIG = {
     key: PLAN_KEYS.FREE,
     label: "Free",
     selfServeCheckout: false,
-    dailySessionLimit: 2,
+    dailySessionLimit: 5,
     billingRequired: false,
   },
   [PLAN_KEYS.PRO]: {
     key: PLAN_KEYS.PRO,
     label: "Pro",
     selfServeCheckout: true,
-    dailySessionLimit: 5,
+    dailySessionLimit: 10,
     billingRequired: true,
   },
   [PLAN_KEYS.TEAM]: {
     key: PLAN_KEYS.TEAM,
     label: "Team",
     selfServeCheckout: true,
-    dailySessionLimitPerMember: 3,
+    dailySessionLimitPerMember: 8,
     billingRequired: true,
-    note:
-      "Team billing uses real team membership, seat counts, and team-level subscription status.",
+    note: "Team billing uses real team membership, seat counts, and team-level subscription status.",
   },
 };
 
 export const USER_PLAN_VALUES = Object.values(PLAN_KEYS);
-export const STRIPE_SUBSCRIPTION_STATUS_VALUES = Object.values(
-  SUBSCRIPTION_STATUS,
-);
+export const STRIPE_SUBSCRIPTION_STATUS_VALUES =
+  Object.values(SUBSCRIPTION_STATUS);
 
 export function getPlanConfig(plan = PLAN_KEYS.FREE) {
   return PLAN_CONFIG[plan] ?? PLAN_CONFIG[PLAN_KEYS.FREE];
