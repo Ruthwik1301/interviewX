@@ -24,7 +24,7 @@ export default function TrustedBy() {
           className="mb-8 text-center text-[11px] font-bold uppercase tracking-widest"
           style={{ color: "var(--color-text-muted)" }}
         >
-          Candidates have gone on to interview at
+          Practice with real interview questions asked at
         </motion.p>
 
         <motion.div
